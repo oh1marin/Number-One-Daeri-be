@@ -1,0 +1,218 @@
+// prisma/schema.prisma
+// BACKEND_HANDOFF.md (관리대장 web-admin) 기준 스키마
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────
+// CUSTOMER (고객)
+// ─────────────────────────────────────
+
+model Customer {
+  id            String   @id @default(cuid())
+  no            Int      @unique @default(autoincrement())
+  registeredAt  DateTime @db.Date
+  dmSend        Boolean  @default(false)
+  smsSend       Boolean  @default(false)
+  category      String
+  name          String
+  info          String?
+  memberNo      String?
+  address       String?
+  addressDetail String?
+  phone         String?
+  mobile        String?
+  otherPhone    String?
+  notes         String?
+  referrerId    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  referrer  Customer?  @relation("Referral", fields: [referrerId], references: [id])
+  referrals Customer[] @relation("Referral")
+  rides     Ride[]
+
+  @@index([name])
+  @@index([phone])
+  @@index([category])
+  @@index([registeredAt])
+  @@map("customers")
+}
+
+// ─────────────────────────────────────
+// DRIVER (기사)
+// ─────────────────────────────────────
+
+model Driver {
+  id            String   @id @default(cuid())
+  no            Int      @unique @default(autoincrement())
+  registeredAt  DateTime @db.Date
+  name          String
+  region        String?
+  timeSlot      String?
+  address       String?
+  addressZip    String?
+  addressDetail String?
+  phone         String?
+  mobile        String?
+  licenseNo     String?
+  residentNo    String?
+  aptitudeTest  String?
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  rides      Ride[]
+  attendance Attendance[]
+
+  @@index([name])
+  @@index([region])
+  @@index([registeredAt])
+  @@map("drivers")
+}
+
+// ─────────────────────────────────────
+// RIDE (운행 콜)
+// ─────────────────────────────────────
+
+model Ride {
+  id           String   @id @default(cuid())
+  date         String // YYYY-MM-DD
+  time         String // HH:mm
+  customerName String
+  phone        String?
+  customerId   String?
+  driverId     String?
+  driverName   String?
+  pickup       String
+  dropoff      String
+  fare         Int      @default(0)
+  discount     Int      @default(0)
+  extra        Int      @default(0)
+  total        Int      @default(0)
+  note         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  driver   Driver?   @relation(fields: [driverId], references: [id], onDelete: SetNull)
+
+  @@index([date])
+  @@index([customerId])
+  @@index([driverId])
+  @@index([customerName])
+  @@index([driverName])
+  @@index([pickup])
+  @@index([dropoff])
+  @@map("rides")
+}
+
+// ─────────────────────────────────────
+// ATTENDANCE (근태)
+// ─────────────────────────────────────
+
+model Attendance {
+  id       String @id @default(cuid())
+  driverId String
+  year     Int
+  month    Int
+  day      Int
+  status   String // "", "0", "지", "결", "휴"
+
+  driver Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@unique([driverId, year, month, day])
+  @@index([driverId])
+  @@index([year, month])
+  @@map("attendance")
+}
+
+// ─────────────────────────────────────
+// INVOICE (세금계산서/거래명세서)
+// ─────────────────────────────────────
+
+model Invoice {
+  id          String   @id @default(cuid())
+  docNo       String   @unique
+  tradeDate   String // YYYY-MM-DD
+  type        String // "tax" | "trade"
+  totalSupply Int
+  totalVat    Int
+  totalAmt    Int
+  vatIncluded Boolean  @default(false)
+  memo        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items InvoiceItem[]
+
+  @@index([tradeDate])
+  @@index([type])
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id        String  @id @default(cuid())
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  name      String
+  spec      String?
+  unitPrice Int     @default(0)
+  quantity  Int     @default(1)
+  supplyAmt Int     @default(0)
+  vatRate   Int     @default(10)
+  vatAmt    Int     @default(0)
+
+  @@index([invoiceId])
+  @@map("invoice_items")
+}
+
+// ─────────────────────────────────────
+// INVOICE SETTINGS (공급자 설정 - 싱글톤)
+// ─────────────────────────────────────
+
+model InvoiceSettings {
+  id               String   @id @default(cuid())
+  bizNo            String?
+  companyName      String?
+  ceoName          String?
+  address          String?
+  businessType     String?
+  businessCategory String?
+  phone            String?
+  itemKorean       Boolean  @default(true)
+  specKorean       Boolean  @default(true)
+  blankZeroQty     Boolean  @default(false)
+  blankZeroSupply  Boolean  @default(false)
+  printSpecAsUnit  Boolean  @default(true)
+  printTradeDate   Boolean  @default(false)
+  noDocNo          Boolean  @default(false)
+  printFooter1     Boolean  @default(true)
+  printFooter1Text String?
+  printFooter2     Boolean  @default(false)
+  printFooter2Text String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("invoice_settings")
+}
+
+// ─────────────────────────────────────
+// FARE SETTINGS (요금 설정 - 싱글톤)
+// ─────────────────────────────────────
+
+model FareSettings {
+  id        String   @id @default(cuid())
+  areas     Json // string[]
+  fares     Json // Record<string, Record<string, number>>
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("fare_settings")
+}
