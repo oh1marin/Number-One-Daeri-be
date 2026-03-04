@@ -1,4 +1,6 @@
-# RIDE Backend API
+# Number-One-Daeri-be
+
+RIDE 관리대장 백엔드 API
 
 ## 시작하기
 
