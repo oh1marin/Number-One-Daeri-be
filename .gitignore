@@ -3,7 +3,18 @@ dist
 .npm-cache
 .env
 .env.local
+.env.*.local
+.env.production
+production.env
 *.log
 .DS_Store
 .vscode
 .idea
+
+# 문서(레포에 올리지 않음)
+docs/
+DOCS/
+
+# 내부/복사본 문서
+WORK_SUMMARY_AND_BACKEND_HANDOFF.md
+BACKEND_SPEC copy.md

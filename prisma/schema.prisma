@@ -11,6 +11,35 @@ datasource db {
 }
 
 // ─────────────────────────────────────
+// ADMIN (관리자 - 로그인/회원가입)
+// ─────────────────────────────────────
+
+model Admin {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  refreshTokens RefreshToken[]
+
+  @@map("admins")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  adminId   String
+  admin     Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([adminId])
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────
 // CUSTOMER (고객)
 // ─────────────────────────────────────
 
@@ -65,16 +94,35 @@ model Driver {
   residentNo    String?
   aptitudeTest  String?
   notes         String?
+  password      String?  // 기사 앱 로그인용
+  currentLat    Float?
+  currentLng    Float?
+  lastLocationAt DateTime?
+  isOnline      Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  rides      Ride[]
-  attendance Attendance[]
+  rides            Ride[]
+  attendance        Attendance[]
+  driverRefreshTokens DriverRefreshToken[]
 
   @@index([name])
   @@index([region])
   @@index([registeredAt])
+  @@index([isOnline])
   @@map("drivers")
+}
+
+model DriverRefreshToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  driverId  String
+  driver    Driver   @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([driverId])
+  @@map("driver_refresh_tokens")
 }
 
 // ─────────────────────────────────────
@@ -83,15 +131,34 @@ model Driver {
 
 model Ride {
   id           String   @id @default(cuid())
-  date         String // YYYY-MM-DD
-  time         String // HH:mm
+  date         String   // YYYY-MM-DD
+  time         String   // HH:mm
   customerName String
   phone        String?
   customerId   String?
+  userId       String?  // 앱 사용자 (Flutter 콜)
   driverId     String?
   driverName   String?
   pickup       String
   dropoff      String
+  latitude     Float?
+  longitude    Float?
+  addressDetail String?
+  destinationLatitude  Float?
+  destinationLongitude Float?
+  destinationAddress   String?
+
+  // 대리호출 옵션 (앱에서 선택적으로 전달)
+  transmission String? // auto | stick
+  serviceType  String? // daeri | taksong
+  quickBoard   String? // possible | impossible
+  vehicleType  String? // sedan | 9seater | 12seater | cargo1t
+
+  fareType     String   @default("normal") // premium | fast | normal
+  paymentMethod String  @default("cash")   // cash | mileage | card | kakaopay | tosspay
+  estimatedDistanceKm Float?
+  estimatedFare      Int?
+  status       String   @default("pending") // pending | accepted | driving | completed | cancelled
   fare         Int      @default(0)
   discount     Int      @default(0)
   extra        Int      @default(0)
@@ -101,15 +168,15 @@ model Ride {
   updatedAt    DateTime @updatedAt
 
   customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  user     User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   driver   Driver?   @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  payments Payment[]
 
   @@index([date])
   @@index([customerId])
+  @@index([userId])
   @@index([driverId])
-  @@index([customerName])
-  @@index([driverName])
-  @@index([pickup])
-  @@index([dropoff])
+  @@index([status])
   @@map("rides")
 }
 
@@ -199,6 +266,7 @@ model InvoiceSettings {
   printFooter2Text String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+  extraSettings    Json?
 
   @@map("invoice_settings")
 }
@@ -215,4 +283,485 @@ model FareSettings {
   updatedAt DateTime @updatedAt
 
   @@map("fare_settings")
+}
+
+// ─────────────────────────────────────
+// USER (앱 사용자 - Flutter 앱)
+// ─────────────────────────────────────
+
+model User {
+  id              String    @id @default(cuid())
+  no              Int?      @unique // 고객번호 (Customer와 통합 시퀀스, 만든 순서대로)
+  email           String?   @unique // 이메일 가입 시 사용, 전화번호 가입 시 null
+  password        String?   // 이메일 가입 시 사용, 전화번호 가입 시 null
+  name            String    @default("앱 사용자")
+  phone           String?   @unique // 전화번호 가입 시 사용, 이메일 가입 시 선택
+  mileageBalance  Int       @default(10000) // 앱 다운로드 시 10,000원 지급
+  settings        Json?     // { pushEnabled?: boolean } 등
+  deletedAt       DateTime? // 계정삭제 시
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  userRefreshTokens UserRefreshToken[]
+  rides             Ride[]
+  mileageHistory    MileageHistory[]
+  withdrawals       Withdrawal[]
+  userCards         UserCard[]
+  payments          Payment[]
+  referralAsReferrer   UserReferral[]       @relation("Referrer")
+  referralAsReferred   UserReferral?        @relation("Referred")
+  referrerTierBonuses  ReferrerTierBonus[]
+  inquiries           UserInquiry[]
+  complaints        Complaint[]
+  userCoupons       UserCoupon[]
+  cashReceipts      CashReceipt[]
+
+  @@map("users")
+}
+
+model UserRefreshToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("user_refresh_tokens")
+}
+
+// ─────────────────────────────────────
+// NOTICE (공지사항)
+// ─────────────────────────────────────
+
+model Notice {
+  id         String   @id @default(cuid())
+  title      String
+  content    String
+  badge      String?  @default("공지")
+  badgeColor String?  @default("bg-red-100 text-red-600")
+  views      Int      @default(0)
+  events     Json?    // [{title, date, desc}]
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("notices")
+}
+
+// ─────────────────────────────────────
+// MILEAGE HISTORY (마일리지 적립/사용)
+// ─────────────────────────────────────
+
+model MileageHistory {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        String   // "earn" | "use" | "withdraw" | "transfer"
+  amount      Int
+  balance     Int      // 적립/차감 후 잔액
+  description String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("mileage_history")
+}
+
+// ─────────────────────────────────────
+// WITHDRAWAL (출금신청)
+// ─────────────────────────────────────
+
+model Withdrawal {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount        Int
+  bankCode      String
+  accountNumber String
+  accountHolder String
+  status        String   @default("pending") // pending | approved | rejected
+  requestedAt   DateTime @default(now())
+  processedAt   DateTime?
+
+  @@index([userId])
+  @@index([status])
+  @@map("withdrawals")
+}
+
+// ─────────────────────────────────────
+// USER CARD (앱 사용자 카드)
+// ─────────────────────────────────────
+
+model UserCard {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cardToken  String?
+  cardName   String
+  last4Digits String?
+  expiryDate  String?  // MM/YY
+  option     String?
+  createdAt   DateTime @default(now())
+
+  payments Payment[]
+
+  @@index([userId])
+  @@map("user_cards")
+}
+
+// ─────────────────────────────────────
+// PAYMENT (앱 카드 결제 내역 - Flutter → 백엔드 저장)
+// ─────────────────────────────────────
+
+model Payment {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rideId      String?
+  ride        Ride?    @relation(fields: [rideId], references: [id], onDelete: SetNull)
+  amount      Int      // 결제 금액 (원)
+  method      String   @default("card")   // card | kakaopay | tosspay | cash | mileage
+  status      String   @default("completed") // pending | completed | failed
+  pgProvider  String?  // portone, nice, etc.
+  pgTid       String?  // PG 거래 ID
+  cardId      String?
+  card        UserCard? @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  receiptUrl  String?
+  rawResponse Json?    // PG 응답 원문 (선택)
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([rideId])
+  @@index([createdAt])
+  @@map("payments")
+}
+
+// ─────────────────────────────────────
+// USER REFERRAL (추천인)
+// ─────────────────────────────────────
+
+model UserReferral {
+  id             String   @id @default(cuid())
+  referrerId     String   // 추천인 User
+  referredId     String   @unique // 피추천인 User (본인)
+  referrer       User     @relation("Referrer", fields: [referrerId], references: [id])
+  referred       User     @relation("Referred", fields: [referredId], references: [id])
+  referrerReward Int      @default(0)
+  referredReward Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  @@index([referrerId])
+  @@map("user_referrals")
+}
+
+model ReferrerTierBonus {
+  id         String   @id @default(cuid())
+  referrerId String
+  referrer   User     @relation(fields: [referrerId], references: [id], onDelete: Cascade)
+  tier       Int      // 2 = 스타벅스 쿠폰 2장, 5 = 교촌치킨 세트
+  rewardType String   // "starbucks_2" | "kyochon_set" (쿠폰, 마일리지 아님)
+  status     String   @default("pending") // pending | claimed
+  createdAt  DateTime @default(now())
+
+  @@unique([referrerId, tier])
+  @@index([referrerId])
+  @@map("referrer_tier_bonuses")
+}
+
+// ─────────────────────────────────────
+// USER INQUIRY (1:1 문의)
+// ─────────────────────────────────────
+
+model UserInquiry {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    String   @default("pending") // pending | answered
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages UserInquiryMessage[]
+
+  @@index([userId])
+  @@map("user_inquiries")
+}
+
+model UserInquiryMessage {
+  id        String       @id @default(cuid())
+  inquiryId String
+  inquiry   UserInquiry  @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  role      String       // "user" | "admin"
+  content   String
+  createdAt DateTime     @default(now())
+
+  @@index([inquiryId])
+  @@map("user_inquiry_messages")
+}
+
+// ─────────────────────────────────────
+// COMPLAINT (불편신고)
+// ─────────────────────────────────────
+
+model Complaint {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        String?
+  content     String
+  rideId      String?
+  attachments Json? // URL 배열 등 앱에서 전달
+  status      String   @default("pending") // pending | reviewed | resolved
+  adminReply  String?  @db.Text // 관리자 답변(문자/메모)
+  repliedAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("complaints")
+}
+
+// ─────────────────────────────────────
+// CONTACT (공개 상담문의 - 비로그인)
+// ─────────────────────────────────────
+
+model Contact {
+  id        String   @id @default(cuid())
+  name      String
+  email     String
+  phone     String?
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("contacts")
+}
+
+// ─────────────────────────────────────
+// FAQ (자주하는질문)
+// ─────────────────────────────────────
+
+model Faq {
+  id        String   @id @default(cuid())
+  question  String
+  answer    String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([sortOrder])
+  @@map("faqs")
+}
+
+// ─────────────────────────────────────
+// COUPON (쿠폰)
+// ─────────────────────────────────────
+
+model Coupon {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String?  // 표시 이름 (앱 쿠폰함)
+  type      String   @default("other") // starbucks | chicken | convenience | giftcard | other
+  imageUrl  String?
+  amount    Int      // 쿠폰 금액(원) — 마일리지 잔액과 별도
+  validUntil DateTime?
+  createdAt DateTime @default(now())
+
+  userCoupons UserCoupon[]
+
+  @@map("coupons")
+}
+
+model UserCoupon {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  couponId  String
+  coupon    Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  // 수령(등록) 시각
+  createdAt DateTime @default(now())
+  // 실제 사용(교환) 시각 — 미사용이면 null
+  usedAt    DateTime?
+  // 쿠폰 상태: active → pending_delivery → delivered
+  status      String   @default("active")
+  redeemedAt  DateTime?
+  deliveredAt DateTime?
+
+  @@unique([userId, couponId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("user_coupons")
+}
+
+// ─────────────────────────────────────
+// CASH RECEIPT (현금영수증)
+// ─────────────────────────────────────
+
+model CashReceipt {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rideId         String?
+  identifier     String   // 하이픈 제거 번호(휴대폰/사업자)
+  identifierType String   // phone | biz
+  amount         Int
+  status         String   @default("issued") // issued | pending | failed
+  issuedAt       DateTime @default(now())
+  downloadUrl    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([userId])
+  @@index([issuedAt])
+  @@map("cash_receipts")
+}
+
+// ─────────────────────────────────────
+// COUPON BUDGET (쿠폰 예산/잔액 - 관리자 충전)
+// ─────────────────────────────────────
+
+model CouponBudget {
+  id        String   @id @default(cuid())
+  balance   Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  history CouponBudgetHistory[]
+
+  @@map("coupon_budgets")
+}
+
+model CouponBudgetHistory {
+  id        String   @id @default(cuid())
+  budgetId  String
+  budget    CouponBudget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  type      String   // charge | spend
+  amount    Int      // +충전, -차감(스펜드)
+  balance   Int      // 반영 후 잔액
+  memo      String?
+  createdAt DateTime @default(now())
+
+  @@index([budgetId])
+  @@index([createdAt])
+  @@map("coupon_budget_history")
+}
+
+// ─────────────────────────────────────
+// EVENT (이벤트)
+// ─────────────────────────────────────
+
+model Event {
+  id        String   @id @default(cuid())
+  title     String
+  imageUrl  String?
+  startAt   DateTime
+  endAt     DateTime
+  url       String?
+  createdAt DateTime @default(now())
+
+  @@index([startAt])
+  @@map("events")
+}
+
+// ─────────────────────────────────────
+// 적립설정 / 사용설명 / 앱 이미지 (Admin)
+// ─────────────────────────────────────
+
+model AccumulationSettings {
+  id                String   @id @default(cuid())
+  signupBonus       Int      @default(10000)
+  referrerRegister  Int      @default(2000)
+  referrerFirstRide Int      @default(3000)
+  referrerRideRate  Float    @default(0.05)   // 추천인: 피추천인 이용 시 5%
+  cardPayRate       Float    @default(0.05)   // (legacy, rideEarnRate 사용)
+  rideEarnRate      Float    @default(0.10)   // 모든 유저: 대리 이용 시 10% 적립
+  updatedAt         DateTime @updatedAt
+
+  @@map("accumulation_settings")
+}
+
+model UsageGuide {
+  id        String   @id @default(cuid())
+  title     String   @default("사용설명")
+  content   String   @db.Text
+  updatedAt DateTime @updatedAt
+
+  @@map("usage_guides")
+}
+
+model AppImage {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  url       String?
+  updatedAt DateTime @updatedAt
+
+  @@map("app_images")
+}
+
+model AdSettings {
+  id          String   @id @default(cuid())
+  imageUrl    String?
+  content     String   @db.Text
+  linkUrl     String?
+  shareText   String?  @db.Text
+  updatedAt   DateTime @updatedAt
+
+  @@map("ad_settings")
+}
+
+model Counselor {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String?
+  email     String?
+  notes     String?
+  loginId   String?   @unique
+  cid       String?
+  password  String?
+  permissions Json?
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("counselors")
+}
+
+model UserLoginLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  userType  String   // "user" | "driver" | "admin"
+  email     String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("user_login_logs")
+}
+
+// ─────────────────────────────────────
+// PHONE OTP (전화번호 인증)
+// ─────────────────────────────────────
+
+model PhoneOtp {
+  id        String   @id @default(cuid())
+  phone     String
+  code      String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([phone])
+  @@map("phone_otps")
+}
+
+// ─────────────────────────────────────
+// NUMBER CHANGE (스팸해결사 자료 - 변경전/변경후 번호)
+// ─────────────────────────────────────
+
+model NumberChange {
+  id          String   @id @default(cuid())
+  phoneBefore String
+  phoneAfter  String
+  createdAt   DateTime @default(now())
+
+  @@index([phoneBefore])
+  @@index([phoneAfter])
+  @@map("number_changes")
 }

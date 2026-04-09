@@ -3,10 +3,11 @@ import { prisma } from '../lib/prisma';
 
 const router = Router();
 
-// GET /rides — 목록 (쿼리: ?date=2026-03-04, ?driverName=홍기사, ?field=phone&q=010)
+// GET /rides — 목록 (관리자 콜 리스트: No, 접수번호, 전화번호, 접수시간, 경과(초), 상태, 출발지, 도착지, 요금, 현금/카드/마일, 결제방법, 접수구분)
+// 쿼리: ?date=, ?driverName=, ?field=phone&q=, ?page=1&limit=50
 router.get('/', async (req, res) => {
   try {
-    const { date, driverName, field, q } = req.query;
+    const { date, driverName, field, q, page, limit } = req.query;
     const where: Record<string, unknown> = {};
 
     if (typeof date === 'string' && date) where.date = date;
@@ -23,16 +24,110 @@ router.get('/', async (req, res) => {
       }
     }
 
-    const rides = await prisma.ride.findMany({
-      where,
-      orderBy: [{ date: 'desc' }, { time: 'desc' }],
-      include: {
-        customer: { select: { id: true, name: true, no: true } },
-        driver: { select: { id: true, name: true, no: true } },
-      },
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.min(200, Math.max(1, Number(limit) || 50));
+    const skip = (pageNum - 1) * limitNum;
+
+    const [rides, total] = await Promise.all([
+      prisma.ride.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }],
+        skip,
+        take: limitNum,
+        include: {
+          customer: { select: { id: true, name: true, no: true } },
+          driver: { select: { id: true, name: true, no: true } },
+          user: { select: { id: true, name: true, phone: true } },
+        },
+      }),
+      prisma.ride.count({ where }),
+    ]);
+
+    const now = Date.now();
+    const items = rides.map((r, i) => {
+      const createdAt = r.createdAt ? new Date(r.createdAt).getTime() : now;
+      const elapsedSeconds = Math.max(0, Math.floor((now - createdAt) / 1000));
+      const method = r.paymentMethod || 'cash';
+      const totalAmount = r.total ?? 0;
+      const estimatedAmount = r.estimatedFare ?? 0;
+      const displayFare = totalAmount > 0 ? totalAmount : estimatedAmount; // 완료 전엔 예정요금 표시
+      // 16680001은 스펙 기본값 → 실제 휴대번호는 user.phone에서 가져옴
+      const displayPhone =
+        r.phone === '16680001' || !/^010\d{8}$/.test((r.phone || '').replace(/\D/g, ''))
+          ? (r.user?.phone ?? r.phone ?? '')
+          : (r.phone ?? r.user?.phone ?? '');
+
+      return {
+        no: skip + i + 1,
+        receiptNo: r.id,
+        receipt_no: r.id,
+        phone: displayPhone,
+        user: r.user ? { id: r.user.id, name: r.user.name, phone: r.user.phone } : null,
+        receivedAt: r.createdAt,
+        date: r.date,
+        time: r.time,
+        elapsedSeconds,
+        status: r.status,
+        pickup: r.pickup ?? '',
+        dropoff: r.dropoff ?? r.destinationAddress ?? '',
+        pickup_address: r.pickup ?? '',
+        dropoff_address: r.dropoff ?? r.destinationAddress ?? '',
+        fare: r.fare,
+        total: totalAmount,
+        fee: totalAmount,
+        estimatedFare: r.estimatedFare ?? null,
+        displayFare, // 요금 컬럼용: total 있으면 total, 없으면 estimatedFare
+        amount: displayFare,
+        cashAmount: method === 'cash' ? totalAmount : 0,
+        cardAmount: method === 'card' ? totalAmount : 0,
+        kakaopayAmount: method === 'kakaopay' ? totalAmount : 0,
+        tosspayAmount: method === 'tosspay' ? totalAmount : 0,
+        mileageAmount: method === 'mileage' ? totalAmount : 0,
+        paymentMethod: method,
+        source: r.userId ? 'app' : 'manual',
+        customerName: r.customerName,
+        driverName: r.driverName,
+
+        // 대리호출 옵션(선택)
+        transmission: r.transmission ?? null,
+        transmissionLabel:
+          r.transmission === 'auto'
+            ? '오토'
+            : r.transmission === 'stick'
+              ? '스틱'
+              : null,
+        serviceType: r.serviceType ?? null,
+        serviceTypeLabel:
+          r.serviceType === 'daeri'
+            ? '대리운전'
+            : r.serviceType === 'taksong'
+              ? '탁송'
+              : null,
+        quickBoard: r.quickBoard ?? null,
+        quickBoardLabel:
+          r.quickBoard === 'possible'
+            ? '퀵보드 가능'
+            : r.quickBoard === 'impossible'
+              ? '퀵보드 불가'
+              : null,
+        vehicleType: r.vehicleType ?? null,
+        vehicleTypeLabel:
+          r.vehicleType === 'sedan'
+            ? '승용차'
+            : r.vehicleType === '9seater'
+              ? '9인승'
+              : r.vehicleType === '12seater'
+                ? '12인승'
+                : r.vehicleType === 'cargo1t'
+                  ? '화물 1톤'
+                  : null,
+
+        customer: r.customer,
+        driver: r.driver,
+      };
     });
 
-    res.json({ success: true, data: rides });
+    res.json({ success: true, data: { items, total, page: pageNum, limit: limitNum } });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });
   }
@@ -46,6 +141,30 @@ router.get('/:id', async (req, res) => {
       include: { customer: true, driver: true },
     });
     if (!ride) return res.status(404).json({ success: false, error: 'Ride not found' });
+    res.json({ success: true, data: ride });
+  } catch (e) {
+    res.status(500).json({ success: false, error: String(e) });
+  }
+});
+
+// POST /rides/:id/price — 예정요금(estimatedFare) 저장
+// FE에서 입력한 estimatedFare를 rides.estimatedFare에 반영한다.
+router.post('/:id/price', async (req, res) => {
+  try {
+    const { estimatedFare } = req.body;
+    const amount = Number(estimatedFare);
+
+    if (!Number.isInteger(amount) || amount < 0) {
+      res.status(400).json({ success: false, error: 'estimatedFare는 0 이상의 정수여야 합니다.' });
+      return;
+    }
+
+    const ride = await prisma.ride.update({
+      where: { id: req.params.id },
+      data: { estimatedFare: amount },
+      select: { id: true, estimatedFare: true },
+    });
+
     res.json({ success: true, data: ride });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });

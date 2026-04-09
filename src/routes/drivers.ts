@@ -49,6 +49,11 @@ router.post('/', async (req, res) => {
       ? new Date(body.registeredAt)
       : new Date();
 
+    const bcrypt = await import('bcryptjs');
+    const hashedPassword = body.password
+      ? await bcrypt.hash(String(body.password), 10)
+      : null;
+
     const driver = await prisma.driver.create({
       data: {
         registeredAt,
@@ -64,6 +69,7 @@ router.post('/', async (req, res) => {
         residentNo: body.residentNo,
         aptitudeTest: body.aptitudeTest,
         notes: body.notes,
+        password: hashedPassword,
       },
     });
     res.status(201).json({ success: true, data: driver });
@@ -76,11 +82,17 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const body = req.body;
+    const bcrypt = await import('bcryptjs');
+    const hashedPassword = body.password
+      ? await bcrypt.hash(String(body.password), 10)
+      : undefined;
+
     const driver = await prisma.driver.update({
       where: { id: req.params.id },
       data: {
         ...(body.registeredAt && { registeredAt: new Date(body.registeredAt) }),
         ...(body.name !== undefined && { name: body.name }),
+        ...(hashedPassword && { password: hashedPassword }),
         ...(body.region !== undefined && { region: body.region }),
         ...(body.timeSlot !== undefined && { timeSlot: body.timeSlot }),
         ...(body.address !== undefined && { address: body.address }),

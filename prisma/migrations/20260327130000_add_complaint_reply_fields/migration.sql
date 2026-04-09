@@ -1,0 +1,4 @@
+ALTER TABLE "complaints"
+  ADD COLUMN IF NOT EXISTS "adminReply" TEXT,
+  ADD COLUMN IF NOT EXISTS "repliedAt" TIMESTAMP(3);
+
