@@ -1,20 +1,30 @@
 import { Router } from 'express';
-import customers from './customers';
-import drivers from './drivers';
-import rides from './rides';
-import attendance from './attendance';
-import invoices from './invoices';
-import settings from './settings';
-import dashboard from './dashboard';
+import appRouter from './app';
+import adminRouter from './admin';
+import driverRouter from './driver';
 
 const router = Router();
 
-router.use('/dashboard', dashboard);
-router.use('/customers', customers);
-router.use('/drivers', drivers);
-router.use('/rides', rides);
-router.use('/attendance', attendance);
-router.use('/invoices', invoices);
-router.use('/settings', settings);
+router.get('/', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      message: '넘버원대리 API v1',
+      version: '0.1.0',
+      app: ['/auth', '/notices', '/contact', '/faqs', '/users', '/rides', '/mileage', '/withdrawals', '/cards', '/payments', '/referrals', '/inquiries', '/complaints', '/coupons', '/receipts/cash', '/events', '/geocode', '/ai/chat'],
+      driver: ['/driver/auth', '/driver/me/location', '/driver/rides'],
+      admin: ['/admin/auth', '/admin/dashboard', '/admin/customers', '/admin/drivers', '/admin/rides', '/admin/attendance', '/admin/invoices', '/admin/settings', '/admin/notices', '/admin/faqs', '/admin/inquiries', '/admin/complaints', '/admin/withdrawals', '/admin/coupons', '/admin/coupon-requests', '/admin/users', '/admin/app-install', '/admin/app-install-stats', '/admin/order-stats', '/admin/number-change', '/admin/recommendation-kings', '/admin/referrals', '/admin/sms'],
+    },
+  });
+});
+
+// 관리대장 웹 (Admin) — /admin 먼저 (안 하면 appRouter의 / 가 먼저 매칭됨)
+router.use('/admin', adminRouter);
+
+// 기사 앱 (Driver)
+router.use('/driver', driverRouter);
+
+// Flutter 앱 (User)
+router.use('/', appRouter);
 
 export default router;

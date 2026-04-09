@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
+import accumulation from './admin/accumulation';
 
 const router = Router();
 
@@ -59,5 +60,7 @@ router.put('/fares', async (req, res) => {
     res.status(500).json({ success: false, error: String(e) });
   }
 });
+
+router.use('/accumulation', accumulation);
 
 export default router;
