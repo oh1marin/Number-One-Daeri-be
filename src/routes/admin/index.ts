@@ -30,6 +30,7 @@ import appInstallStats from './appInstallStats';
 import orderStats from './orderStats';
 import numberChange from './numberChange';
 import recommendationKings from './recommendationKings';
+import storage from './storage';
 import { authMiddleware } from '../../middleware/auth';
 
 const router = Router();
@@ -66,5 +67,6 @@ router.use('/ads', ads);
 router.use('/mileage', mileage);
 router.use('/card-payments', cardPayments);
 router.use('/sms', sms);
+router.use('/storage', storage);
 
 export default router;

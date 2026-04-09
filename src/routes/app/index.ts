@@ -19,6 +19,7 @@ import banks from './banks';
 import geocode from './geocode';
 import ai from './ai';
 import receipts from './receipts';
+import storage from './storage';
 import { userAuthMiddleware } from '../../middleware/userAuth';
 
 const router = Router();
@@ -65,6 +66,7 @@ router.use('/inquiries', inquiries);
 router.use('/complaints', complaints);
 router.use('/coupons', coupons);
 router.use('/receipts', receipts);
+router.use('/storage', storage);
 router.use('/ai', ai);
 
 export default router;
