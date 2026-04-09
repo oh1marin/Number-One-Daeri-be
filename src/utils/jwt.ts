@@ -1,9 +1,12 @@
-import jwt from 'jsonwebtoken';
+import jwt, { type SignOptions } from 'jsonwebtoken';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret';
 const ACCESS_EXPIRES = process.env.JWT_ACCESS_EXPIRES || '1h';
 const REFRESH_EXPIRES = process.env.JWT_REFRESH_EXPIRES || '7d';
+
+const accessSignOpts = { expiresIn: ACCESS_EXPIRES } as SignOptions;
+const refreshSignOpts = { expiresIn: REFRESH_EXPIRES } as SignOptions;
 
 export interface TokenPayload {
   adminId?: string;
@@ -14,11 +17,11 @@ export interface TokenPayload {
 }
 
 export function signAccessToken(payload: TokenPayload): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: ACCESS_EXPIRES });
+  return jwt.sign(payload, JWT_SECRET, accessSignOpts);
 }
 
 export function signRefreshToken(payload: TokenPayload): string {
-  return jwt.sign(payload, JWT_REFRESH_SECRET, { expiresIn: REFRESH_EXPIRES });
+  return jwt.sign(payload, JWT_REFRESH_SECRET, refreshSignOpts);
 }
 
 export function verifyAccessToken(token: string): TokenPayload {

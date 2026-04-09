@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 
 const router = Router();
@@ -139,7 +140,7 @@ router.patch('/', async (req, res) => {
           ...(ceoName != null && { ceoName: String(ceoName).trim() || null }),
           ...(phone != null && { phone: String(phone).trim() || null }),
           ...(address != null && { address: String(address).trim() || null }),
-          ...(Object.keys(nextExtra).length > 0 && { extraSettings: nextExtra }),
+          ...(Object.keys(nextExtra).length > 0 && { extraSettings: nextExtra as Prisma.InputJsonValue }),
         },
       });
     } else {
@@ -164,7 +165,7 @@ router.patch('/', async (req, res) => {
           ceoName: ceoName != null ? String(ceoName).trim() || null : null,
           phone: phone != null ? String(phone).trim() || null : null,
           address: address != null ? String(address).trim() || null : null,
-          ...(Object.keys(extraSettings).length > 0 && { extraSettings }),
+          ...(Object.keys(extraSettings).length > 0 && { extraSettings: extraSettings as Prisma.InputJsonValue }),
         },
       });
     }

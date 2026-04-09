@@ -119,7 +119,7 @@ router.post('/phone/verify', async (req, res) => {
       });
     }
 
-    const payload = { userId: user.id, phone: user.phone };
+    const payload = { userId: user.id, phone: user.phone ?? undefined };
     const accessToken = signAccessToken(payload);
     const refreshToken = signRefreshToken(payload);
 
@@ -202,7 +202,7 @@ router.post('/register', async (req, res) => {
       },
     });
 
-    const payload = { userId: user.id, email: user.email };
+    const payload = { userId: user.id, email: user.email ?? undefined };
     const accessToken = signAccessToken(payload);
     const refreshToken = signRefreshToken(payload);
 
@@ -261,7 +261,7 @@ router.post('/login', async (req, res) => {
       return;
     }
 
-    const payload = { userId: user.id, email: user.email };
+    const payload = { userId: user.id, email: user.email ?? undefined };
     const accessToken = signAccessToken(payload);
     const refreshToken = signRefreshToken(payload);
 

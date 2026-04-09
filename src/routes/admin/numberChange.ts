@@ -86,7 +86,7 @@ router.post('/', async (req, res) => {
           phoneBefore: normalizePhone(String((x as { phoneBefore?: string }).phoneBefore ?? '')),
           phoneAfter: normalizePhone(String((x as { phoneAfter?: string }).phoneAfter ?? '')),
         }))
-        .filter((x) => x.phoneBefore.length >= 10 && x.phoneAfter.length >= 10);
+        .filter((x: { phoneBefore: string; phoneAfter: string }) => x.phoneBefore.length >= 10 && x.phoneAfter.length >= 10);
     } else if (body.phoneBefore != null && body.phoneAfter != null) {
       const before = normalizePhone(String(body.phoneBefore));
       const after = normalizePhone(String(body.phoneAfter));
