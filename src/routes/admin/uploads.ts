@@ -5,6 +5,7 @@ import { getPresignedPutUrl, isS3Configured, publicObjectUrl } from '../../lib/s
 
 const router = Router();
 
+/** PutObject Content-Type 과 확장자 (브라우저 PUT 시 동일 헤더 필요) */
 const IMAGE_EXT_BY_TYPE: Record<string, string> = {
   'image/jpeg': '.jpg',
   'image/jpg': '.jpg',
@@ -21,6 +22,7 @@ function normalizeContentType(raw: unknown): string {
   return t;
 }
 
+/** S3 객체 키 접두(폴더). .. / 절대경로 / 이상 문자 금지 */
 function normalizePresignPath(raw: unknown): string {
   const s = String(raw ?? 'uploads/admin')
     .trim()
@@ -54,6 +56,7 @@ function isCredentialsError(e: unknown): boolean {
 }
 
 // POST /admin/uploads/presign — body: { contentType, filename, presignPath? }
+// filename 은 로깅·클라이언트 관례용; 실제 키는 UUID + contentType 기준 확장자
 router.post('/presign', async (req, res) => {
   try {
     if (!isS3Configured()) {
