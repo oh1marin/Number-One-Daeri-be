@@ -31,6 +31,7 @@ import orderStats from './orderStats';
 import numberChange from './numberChange';
 import recommendationKings from './recommendationKings';
 import storage from './storage';
+import uploads from './uploads';
 import { authMiddleware } from '../../middleware/auth';
 
 const router = Router();
@@ -68,5 +69,6 @@ router.use('/mileage', mileage);
 router.use('/card-payments', cardPayments);
 router.use('/sms', sms);
 router.use('/storage', storage);
+router.use('/uploads', uploads);
 
 export default router;
