@@ -57,7 +57,7 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, timestamp: new Date().toISOString() });
 });
 
-// 공지 (웹 폴백: GET /notices, GET /notices/:id)
+// 공지 — Flutter/웹 홈 호환: 루트 `/notices` (nginx가 /api/v1 만 넘길 때 대비). 동일 라우터가 `/api/v1/notices`에도 마운트됨.
 app.use('/notices', appNotices);
 
 // API v1

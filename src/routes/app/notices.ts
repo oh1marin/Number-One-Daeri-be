@@ -1,3 +1,8 @@
+/**
+ * 공개 공지 API — 인증 불필요.
+ * 마운트 경로: `GET /api/v1/notices` (routes/index → app) 및 `GET /notices` (app.ts 루트).
+ * 응답: `{ success, data: { items, total } }` (목록), `{ success, data }` (단건).
+ */
 import { Router } from 'express';
 import { prisma } from '../../lib/prisma';
 
