@@ -21,10 +21,24 @@ app.use(
   })
 );
 
-const adminWebOrigins = (process.env.ADMIN_WEB_ORIGINS || 'http://localhost:3002,http://127.0.0.1:3002')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+function parseOriginList(raw: string | undefined): string[] {
+  return (raw ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** 관리자 웹 + 공개 홈(공지 등) 등 브라우저에서 API를 부를 수 있는 Origin 목록 */
+const browserAllowedOrigins = [
+  ...new Set([
+    ...parseOriginList(process.env.ADMIN_WEB_ORIGINS),
+    ...parseOriginList(process.env.PUBLIC_WEB_ORIGINS),
+    // 기본값: 로컬 관리자 (ADMIN 미설정 시)
+    ...(process.env.ADMIN_WEB_ORIGINS?.trim()
+      ? []
+      : ['http://localhost:3002', 'http://127.0.0.1:3002']),
+  ]),
+];
 
 app.use(
   cors({
@@ -34,7 +48,7 @@ app.use(
         callback(null, true);
         return;
       }
-      if (adminWebOrigins.includes(origin)) {
+      if (browserAllowedOrigins.includes(origin)) {
         callback(null, origin);
         return;
       }
