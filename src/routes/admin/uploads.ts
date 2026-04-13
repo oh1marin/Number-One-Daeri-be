@@ -44,6 +44,17 @@ function normalizePresignPath(raw: unknown): string {
   return parts.join('/');
 }
 
+function isCredentialsError(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false;
+  const name = (e as { name?: string }).name ?? '';
+  const msg = String((e as { message?: string }).message ?? e);
+  return (
+    name === 'CredentialsProviderError' ||
+    name === 'TokenProviderError' ||
+    /credentials|Could not load credentials|EC2 Metadata/i.test(msg)
+  );
+}
+
 // POST /admin/uploads/presign — body: { contentType, filename, presignPath? }
 // filename 은 로깅·클라이언트 관례용; 실제 키는 UUID + contentType 기준 확장자
 router.post('/presign', async (req, res) => {
@@ -84,6 +95,15 @@ router.post('/presign', async (req, res) => {
       data: { putUrl, publicUrl, key, contentType },
     });
   } catch (e) {
+    console.error('[admin/uploads/presign]', e);
+    if (isCredentialsError(e)) {
+      jsonError(
+        res,
+        503,
+        'S3 서명에 쓸 AWS 자격 증명이 없습니다. EC2 인스턴스에 IAM 역할(s3:PutObject 등)을 붙이거나, 서버 환경에 AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY 를 설정하세요.'
+      );
+      return;
+    }
     jsonServerError(res, e);
   }
 });
