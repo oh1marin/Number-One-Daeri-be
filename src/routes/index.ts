@@ -13,7 +13,7 @@ router.get('/', (req, res) => {
       version: '0.1.0',
       app: ['/auth', '/notices', '/contact', '/faqs', '/users', '/rides', '/mileage', '/withdrawals', '/cards', '/payments', '/referrals', '/inquiries', '/complaints', '/coupons', '/receipts/cash', '/events', '/geocode', '/storage/presign-put', '/ai/chat'],
       driver: ['/driver/auth', '/driver/me/location', '/driver/rides'],
-      admin: ['/admin/auth', '/admin/dashboard', '/admin/customers', '/admin/drivers', '/admin/rides', '/admin/attendance', '/admin/invoices', '/admin/settings', '/admin/notices', '/admin/faqs', '/admin/inquiries', '/admin/complaints', '/admin/withdrawals', '/admin/coupons', '/admin/coupon-requests', '/admin/users', '/admin/app-install', '/admin/app-install-stats', '/admin/order-stats', '/admin/number-change', '/admin/recommendation-kings', '/admin/referrals', '/admin/sms', '/admin/storage/presign-put'],
+      admin: ['/admin/auth', '/admin/dashboard', '/admin/customers', '/admin/drivers', '/admin/rides', '/admin/attendance', '/admin/invoices', '/admin/settings', '/admin/notices', '/admin/faqs', '/admin/inquiries', '/admin/complaints', '/admin/withdrawals', '/admin/coupons', '/admin/coupon-requests', '/admin/users', '/admin/app-install', '/admin/app-install-stats', '/admin/order-stats', '/admin/number-change', '/admin/recommendation-kings', '/admin/referrals', '/admin/sms', '/admin/storage/presign-put', '/admin/uploads/presign'],
     },
   });
 });
