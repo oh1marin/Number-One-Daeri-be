@@ -51,7 +51,7 @@ export async function sendSms(phone: string, message: string): Promise<boolean> 
 }
 
 export async function sendSmsOtp(phone: string, code: string): Promise<boolean> {
-  const message = `[넘버원대리] 인증번호 [${code}]를 5분 내에 입력해주세요.`;
+  const message = `[일등대리] 인증번호 [${code}]를 5분 내에 입력해주세요.`;
   return sendSms(phone, message);
 }
 

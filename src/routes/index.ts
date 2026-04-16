@@ -9,7 +9,7 @@ router.get('/', (req, res) => {
   res.json({
     success: true,
     data: {
-      message: '넘버원대리 API v1',
+      message: '일등대리 API v1',
       version: '0.1.0',
       app: ['/auth', '/notices', '/contact', '/faqs', '/users', '/rides', '/mileage', '/withdrawals', '/cards', '/payments', '/referrals', '/inquiries', '/complaints', '/coupons', '/receipts/cash', '/events', '/geocode', '/storage/presign-put', '/ai/chat'],
       driver: ['/driver/auth', '/driver/me/location', '/driver/rides'],

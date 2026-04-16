@@ -39,7 +39,7 @@ export async function sendContactEmail(data: {
   }
   try {
     await transporter.sendMail({
-      from: process.env.SMTP_FROM || `"넘버원대리" <${process.env.SMTP_USER}>`,
+      from: process.env.SMTP_FROM || `"일등대리" <${process.env.SMTP_USER}>`,
       to: toEmail,
       subject: `[상담문의] ${data.name} (${data.email})`,
       text: [
