@@ -20,6 +20,7 @@ import geocode from './geocode';
 import ai from './ai';
 import receipts from './receipts';
 import storage from './storage';
+import pushTokens from './pushTokens';
 import { userAuthMiddleware } from '../../middleware/userAuth';
 
 const router = Router();
@@ -56,6 +57,7 @@ router.use('/faqs', faqs);
 // 인증 필요 (앱 사용자)
 router.use(userAuthMiddleware);
 router.use('/users', users);
+router.use('/push-tokens', pushTokens);
 router.use('/rides', rides);
 router.use('/mileage', mileage);
 router.use('/withdrawals', withdrawals);

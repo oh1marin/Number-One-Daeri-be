@@ -3,6 +3,25 @@ import { prisma } from '../../lib/prisma';
 
 const router = Router();
 
+const BULK_MILEAGE_MAX = 300;
+
+function digitsOnly(phone: string): string {
+  return phone.replace(/\D/g, '');
+}
+
+async function phoneDigitsToUserId(): Promise<Map<string, string>> {
+  const users = await prisma.user.findMany({
+    where: { deletedAt: null, phone: { not: null } },
+    select: { id: true, phone: true },
+  });
+  const map = new Map<string, string>();
+  for (const u of users) {
+    const d = digitsOnly(u.phone || '');
+    if (d.length >= 10) map.set(d, u.id);
+  }
+  return map;
+}
+
 // POST /admin/mileage/adjust — 마일리지 적립/차감 { userId, amount, reason }
 router.post('/adjust', async (req, res) => {
   try {
@@ -51,6 +70,85 @@ router.post('/adjust', async (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });
+  }
+});
+
+// POST /admin/mileage/bulk-adjust — 엑셀 등 일괄 적립/차감 { items: [{ userId?, phone?, amount, reason? }] }
+// amount: 양수 적립, 음수 차감. 전화번호는 앱 회원(탈퇴 제외)과 숫자만 일치 시 매칭.
+router.post('/bulk-adjust', async (req, res) => {
+  try {
+    const { items } = req.body as {
+      items?: { userId?: string; phone?: string; amount?: unknown; reason?: string }[];
+    };
+    if (!Array.isArray(items) || items.length === 0) {
+      res.status(400).json({ success: false, error: 'items는 비어 있지 않은 배열이어야 합니다.' });
+      return;
+    }
+    if (items.length > BULK_MILEAGE_MAX) {
+      res.status(400).json({
+        success: false,
+        error: `한 번에 최대 ${BULK_MILEAGE_MAX}건까지 처리할 수 있습니다.`,
+      });
+      return;
+    }
+
+    const phoneMap = await phoneDigitsToUserId();
+
+    await prisma.$transaction(async (tx) => {
+      for (let i = 0; i < items.length; i++) {
+        const row = items[i];
+        let uid = typeof row.userId === 'string' ? row.userId.trim() : '';
+        if (!uid && row.phone != null) {
+          const d = digitsOnly(String(row.phone));
+          uid = phoneMap.get(d) ?? '';
+        }
+        if (!uid) {
+          throw new Error(`행 ${i + 1}: userId 또는 등록된 전화번호로 회원을 찾을 수 없습니다.`);
+        }
+        const amt = Math.round(Number(row.amount));
+        if (!Number.isFinite(amt) || amt === 0) {
+          throw new Error(`행 ${i + 1}: amount는 0이 아닌 숫자여야 합니다.`);
+        }
+        const user = await tx.user.findFirst({
+          where: { id: uid, deletedAt: null },
+        });
+        if (!user) {
+          throw new Error(`행 ${i + 1}: 회원을 찾을 수 없습니다.`);
+        }
+        const newBalance = user.mileageBalance + amt;
+        if (newBalance < 0) {
+          throw new Error(
+            `행 ${i + 1}: 잔액이 음수가 됩니다. (현재 ${user.mileageBalance}원, 변동 ${amt}원)`,
+          );
+        }
+        const type = amt > 0 ? 'earn' : 'use';
+        const desc =
+          (row.reason && String(row.reason).trim()) ||
+          (amt > 0 ? '관리자 일괄 적립' : '관리자 일괄 차감');
+        await tx.user.update({
+          where: { id: uid },
+          data: { mileageBalance: newBalance },
+        });
+        await tx.mileageHistory.create({
+          data: {
+            userId: uid,
+            type,
+            amount: Math.abs(amt),
+            balance: newBalance,
+            description: desc,
+          },
+        });
+      }
+    });
+
+    res.json({ success: true, data: { processed: items.length } });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/^행 \d+:/.test(msg)) {
+      res.status(400).json({ success: false, error: msg });
+      return;
+    }
+    res.status(500).json({ success: false, error: msg });
   }
 });
 

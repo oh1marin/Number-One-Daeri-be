@@ -3,6 +3,64 @@ import { prisma } from '../lib/prisma';
 
 const router = Router();
 
+const BULK_RIDE_MAX = 500;
+
+function parseMoney(v: unknown): number {
+  if (v == null || v === '') return 0;
+  const n = Number(String(v).replace(/,/g, '').replace(/\s/g, ''));
+  return Number.isFinite(n) ? Math.round(n) : 0;
+}
+
+const PAYMENT_METHODS = new Set(['cash', 'mileage', 'card', 'kakaopay', 'tosspay']);
+
+function normalizePaymentMethod(raw: unknown): string {
+  const s = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  if (!s) return 'cash';
+  if (PAYMENT_METHODS.has(s)) return s;
+  if (/마일|mileage/.test(s)) return 'mileage';
+  if (/카드|card/.test(s)) return 'card';
+  if (/카카오|kakao/.test(s)) return 'kakaopay';
+  if (/토스|toss/.test(s)) return 'tosspay';
+  if (/현금|cash/.test(s)) return 'cash';
+  return 'cash';
+}
+
+const RIDE_STATUSES = new Set(['pending', 'accepted', 'driving', 'completed', 'cancelled']);
+
+function normalizeRideStatus(raw: unknown): string {
+  const s = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  if (!s) return 'completed';
+  if (RIDE_STATUSES.has(s)) return s;
+  if (/완료|complete/.test(s)) return 'completed';
+  if (/대기|접수|pending/.test(s)) return 'pending';
+  if (/수락|배정|accepted/.test(s)) return 'accepted';
+  if (/운행|진행|driving/.test(s)) return 'driving';
+  if (/취소|cancel/.test(s)) return 'cancelled';
+  return 'completed';
+}
+
+function digitsOnly(phone: string): string {
+  return phone.replace(/\D/g, '');
+}
+
+/** 관리자 벌크용: 활성 앱 회원 전화 → userId */
+async function buildPhoneToUserIdMap(): Promise<Map<string, string>> {
+  const users = await prisma.user.findMany({
+    where: { deletedAt: null, phone: { not: null } },
+    select: { id: true, phone: true },
+  });
+  const map = new Map<string, string>();
+  for (const u of users) {
+    const d = digitsOnly(u.phone || '');
+    if (d.length >= 10) map.set(d, u.id);
+  }
+  return map;
+}
+
 // GET /rides — 목록 (관리자 콜 리스트: No, 접수번호, 전화번호, 접수시간, 경과(초), 상태, 출발지, 도착지, 요금, 현금/카드/마일, 결제방법, 접수구분)
 // 쿼리: ?date=, ?driverName=, ?field=phone&q=, ?page=1&limit=50
 router.get('/', async (req, res) => {
@@ -128,6 +186,172 @@ router.get('/', async (req, res) => {
     });
 
     res.json({ success: true, data: { items, total, page: pageNum, limit: limitNum } });
+  } catch (e) {
+    res.status(500).json({ success: false, error: String(e) });
+  }
+});
+
+// POST /rides/bulk-import — 관리자: 엑셀 등 운행 일괄 등록 { items: [...] }
+// 필수: customerName, pickup, dropoff. 선택: date, time, phone, fare, discount, extra, total, estimatedFare, paymentMethod, status, driverName, note, linkUserByPhone(기본 true)
+router.post('/bulk-import', async (req, res) => {
+  try {
+    const { items, linkUserByPhone } = req.body as {
+      items?: unknown[];
+      linkUserByPhone?: boolean;
+    };
+    if (!Array.isArray(items) || items.length === 0) {
+      res.status(400).json({ success: false, error: 'items는 비어 있지 않은 배열이어야 합니다.' });
+      return;
+    }
+    if (items.length > BULK_RIDE_MAX) {
+      res.status(400).json({
+        success: false,
+        error: `한 번에 최대 ${BULK_RIDE_MAX}건까지 등록할 수 있습니다.`,
+      });
+      return;
+    }
+
+    const doLink = linkUserByPhone !== false;
+    const phoneMap = doLink ? await buildPhoneToUserIdMap() : new Map<string, string>();
+
+    const today = new Date().toISOString().slice(0, 10);
+    const nowTime = new Date().toTimeString().slice(0, 5);
+
+    type RowErr = { index: number; message: string };
+    const rowErrors: RowErr[] = [];
+    const dataToCreate: {
+      date: string;
+      time: string;
+      customerName: string;
+      phone: string | null;
+      userId: string | null;
+      pickup: string;
+      dropoff: string;
+      fare: number;
+      discount: number;
+      extra: number;
+      total: number;
+      estimatedFare: number | null;
+      paymentMethod: string;
+      status: string;
+      driverName: string | null;
+      note: string | null;
+    }[] = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const raw = items[i];
+      if (raw == null || typeof raw !== 'object') {
+        rowErrors.push({ index: i, message: '행이 객체가 아닙니다.' });
+        continue;
+      }
+      const o = raw as Record<string, unknown>;
+      const customerName = String(o.customerName ?? '').trim();
+      const pickup = String(o.pickup ?? '').trim();
+      const dropoff = String(o.dropoff ?? '').trim();
+      if (!customerName && !pickup && !dropoff) continue;
+
+      if (!customerName) rowErrors.push({ index: i, message: '고객명(customerName)이 비었습니다.' });
+      if (!pickup) rowErrors.push({ index: i, message: '출발지(pickup)가 비었습니다.' });
+      if (!dropoff) rowErrors.push({ index: i, message: '목적지(dropoff)가 비었습니다.' });
+      if (!customerName || !pickup || !dropoff) continue;
+
+      const dateRaw = String(o.date ?? '').trim();
+      const timeRaw = String(o.time ?? '').trim();
+      const date = dateRaw || today;
+      const time = timeRaw || nowTime;
+
+      const fare = parseMoney(o.fare);
+      const discount = parseMoney(o.discount);
+      const extra = parseMoney(o.extra);
+      let total = parseMoney(o.total);
+      if (total === 0 && (fare !== 0 || discount !== 0 || extra !== 0)) {
+        total = fare + extra - discount;
+      }
+      if (total < 0) {
+        rowErrors.push({ index: i, message: '합계(total)가 음수가 될 수 없습니다.' });
+        continue;
+      }
+
+      const phoneStr = o.phone != null && String(o.phone).trim() !== '' ? String(o.phone).trim() : null;
+      const digits = phoneStr ? digitsOnly(phoneStr) : '';
+      const userId =
+        doLink && digits.length >= 10 ? (phoneMap.get(digits) ?? null) : null;
+
+      const est = o.estimatedFare;
+      const estimatedFare =
+        est == null || est === '' ? null : (Number.isFinite(Number(est)) ? Math.round(Number(est)) : null);
+
+      dataToCreate.push({
+        date,
+        time,
+        customerName,
+        phone: phoneStr,
+        userId,
+        pickup,
+        dropoff,
+        fare,
+        discount,
+        extra,
+        total,
+        estimatedFare,
+        paymentMethod: normalizePaymentMethod(o.paymentMethod),
+        status: normalizeRideStatus(o.status),
+        driverName:
+          o.driverName != null && String(o.driverName).trim() !== ''
+            ? String(o.driverName).trim()
+            : null,
+        note: o.note != null && String(o.note).trim() !== '' ? String(o.note).trim() : null,
+      });
+    }
+
+    if (rowErrors.length > 0) {
+      res.status(400).json({
+        success: false,
+        error: '일부 행 검증에 실패했습니다.',
+        data: { rowErrors, validCount: dataToCreate.length },
+      });
+      return;
+    }
+
+    if (dataToCreate.length === 0) {
+      res.status(400).json({ success: false, error: '등록할 유효한 행이 없습니다.' });
+      return;
+    }
+
+    const result = await prisma.$transaction(
+      dataToCreate.map((d) =>
+        prisma.ride.create({
+          data: {
+            date: d.date,
+            time: d.time,
+            customerName: d.customerName,
+            phone: d.phone,
+            userId: d.userId,
+            pickup: d.pickup,
+            dropoff: d.dropoff,
+            fare: d.fare,
+            discount: d.discount,
+            extra: d.extra,
+            total: d.total,
+            ...(d.estimatedFare != null ? { estimatedFare: d.estimatedFare } : {}),
+            paymentMethod: d.paymentMethod,
+            status: d.status,
+            driverName: d.driverName,
+            note: d.note,
+          },
+          select: { id: true },
+        }),
+      ),
+    );
+
+    res.status(201).json({
+      success: true,
+      data: {
+        created: result.length,
+        ids: result.map((r) => r.id),
+        linkedUsers: dataToCreate.filter((d) => d.userId).length,
+      },
+    });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });
   }

@@ -164,6 +164,8 @@ model Ride {
   extra        Int      @default(0)
   total        Int      @default(0)
   note         String?
+  /// 앱이 보내는 멱등 키(재시도 시 동일 콜 반환). userId와 함께 유일.
+  clientCallId String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -172,6 +174,7 @@ model Ride {
   driver   Driver?   @relation(fields: [driverId], references: [id], onDelete: SetNull)
   payments Payment[]
 
+  @@unique([userId, clientCallId])
   @@index([date])
   @@index([customerId])
   @@index([userId])
@@ -315,8 +318,27 @@ model User {
   complaints        Complaint[]
   userCoupons       UserCoupon[]
   cashReceipts      CashReceipt[]
+  pushTokens        UserPushToken[]
 
   @@map("users")
+}
+
+// ─────────────────────────────────────
+// USER PUSH TOKEN (FCM 등)
+// ─────────────────────────────────────
+
+model UserPushToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// FCM 등록 토큰 — 전역 유일(같은 토큰은 한 계정에만 귀속, 재로그인 시 upsert로 이전)
+  token     String   @unique
+  platform  String   // android | ios | web
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("user_push_tokens")
 }
 
 model UserRefreshToken {
@@ -425,13 +447,17 @@ model Payment {
   status      String   @default("completed") // pending | completed | failed
   pgProvider  String?  // portone, nice, etc.
   pgTid       String?  // PG 거래 ID
+  /// 클라이언트 멱등 키(헤더 Idempotency-Key 또는 body.idempotencyKey). userId와 함께 유일.
+  idempotencyKey String?
   cardId      String?
   card        UserCard? @relation(fields: [cardId], references: [id], onDelete: SetNull)
   receiptUrl  String?
   rawResponse Json?    // PG 응답 원문 (선택)
   createdAt   DateTime @default(now())
 
+  @@unique([userId, idempotencyKey])
   @@index([userId])
+  @@index([userId, pgTid])
   @@index([rideId])
   @@index([createdAt])
   @@map("payments")

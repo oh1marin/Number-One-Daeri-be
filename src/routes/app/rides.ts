@@ -1,5 +1,7 @@
 import { Router } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
+import { readClientCallId } from '../../lib/idempotency';
 import { findNearbyDrivers } from '../../services/matchingService';
 
 const router = Router();
@@ -106,7 +108,15 @@ router.post('/call', async (req, res) => {
       serviceType,
       quickBoard,
       vehicleType,
+      clientCallId: bodyClientCallId,
     } = req.body;
+
+    const ccResult = readClientCallId(bodyClientCallId);
+    if (!ccResult.ok) {
+      res.status(400).json({ success: false, error: ccResult.error });
+      return;
+    }
+    const clientCallId = ccResult.id;
 
     if (!address) {
       res.status(400).json({ success: false, error: 'address 필수' });
@@ -209,36 +219,81 @@ router.post('/call', async (req, res) => {
     const rideAddressDetail =
       typeof addressDetail === 'string' && addressDetail.trim() !== '' ? addressDetail.trim() : null;
 
-    const ride = await prisma.ride.create({
-      data: {
-        date: today,
-        time,
-        customerName: user.name ?? '앱 사용자',
-        phone: phone ?? user.phone ?? '16680001',
-        userId,
-        pickup: address,
-        dropoff: dropoffText,
-        latitude: lat,
-        longitude: lng,
-        // 앱이 보내는 도착 설명 문자열(없으면 null)
-        addressDetail: rideAddressDetail,
-        destinationLatitude: destLat,
-        destinationLongitude: destLng,
-        destinationAddress: destinationAddrText,
+    if (clientCallId) {
+      const existingRide = await prisma.ride.findUnique({
+        where: { userId_clientCallId: { userId, clientCallId } },
+      });
+      if (existingRide) {
+        res.status(200).json({
+          success: true,
+          data: {
+            rideId: existingRide.id,
+            status: existingRide.status,
+            estimatedTime: null,
+            idempotentReplay: true as const,
+          },
+        });
+        return;
+      }
+    }
 
-        // 대리호출 옵션(선택)
-        transmission: transmission ?? null,
-        serviceType: serviceType ?? null,
-        quickBoard: quickBoard ?? null,
-        vehicleType: vehicleType ?? null,
+    let ride;
+    try {
+      ride = await prisma.ride.create({
+        data: {
+          date: today,
+          time,
+          customerName: user.name ?? '앱 사용자',
+          phone: phone ?? user.phone ?? '16680001',
+          userId,
+          pickup: address,
+          dropoff: dropoffText,
+          latitude: lat,
+          longitude: lng,
+          // 앱이 보내는 도착 설명 문자열(없으면 null)
+          addressDetail: rideAddressDetail,
+          destinationLatitude: destLat,
+          destinationLongitude: destLng,
+          destinationAddress: destinationAddrText,
 
-        fareType,
-        paymentMethod,
-        estimatedDistanceKm: estimatedDistanceKm != null ? Number(estimatedDistanceKm) : null,
-        estimatedFare: estimatedFare != null ? Math.round(Number(estimatedFare)) : null,
-        status: 'pending',
-      },
-    });
+          // 대리호출 옵션(선택)
+          transmission: transmission ?? null,
+          serviceType: serviceType ?? null,
+          quickBoard: quickBoard ?? null,
+          vehicleType: vehicleType ?? null,
+
+          fareType,
+          paymentMethod,
+          estimatedDistanceKm: estimatedDistanceKm != null ? Number(estimatedDistanceKm) : null,
+          estimatedFare: estimatedFare != null ? Math.round(Number(estimatedFare)) : null,
+          status: 'pending',
+          ...(clientCallId ? { clientCallId } : {}),
+        },
+      });
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002' &&
+        clientCallId
+      ) {
+        const existingRide = await prisma.ride.findUnique({
+          where: { userId_clientCallId: { userId, clientCallId } },
+        });
+        if (existingRide) {
+          res.status(200).json({
+            success: true,
+            data: {
+              rideId: existingRide.id,
+              status: existingRide.status,
+              estimatedTime: null,
+              idempotentReplay: true as const,
+            },
+          });
+          return;
+        }
+      }
+      throw e;
+    }
 
     // 마일리지 결제: 잔액만 검증. 실제 차감은 운행 완료 시(complete) 처리
 
