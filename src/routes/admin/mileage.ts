@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../../lib/prisma';
+import { sendMileageAdjustNotification } from '../../lib/fcm';
 
 const router = Router();
 
@@ -68,6 +69,10 @@ router.post('/adjust', async (req, res) => {
       success: true,
       data: { userId, amount: amt, balance: newBalance, description: desc },
     });
+
+    void sendMileageAdjustNotification(userId, amt, newBalance, desc).catch((err) => {
+      console.warn('[FCM] mileage adjust 알림 실패:', err);
+    });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });
   }
@@ -93,6 +98,8 @@ router.post('/bulk-adjust', async (req, res) => {
     }
 
     const phoneMap = await phoneDigitsToUserId();
+
+    const pushTargets: { userId: string; delta: number; balance: number; desc: string }[] = [];
 
     await prisma.$transaction(async (tx) => {
       for (let i = 0; i < items.length; i++) {
@@ -138,10 +145,17 @@ router.post('/bulk-adjust', async (req, res) => {
             description: desc,
           },
         });
+        pushTargets.push({ userId: uid, delta: amt, balance: newBalance, desc });
       }
     });
 
     res.json({ success: true, data: { processed: items.length } });
+
+    for (const p of pushTargets) {
+      void sendMileageAdjustNotification(p.userId, p.delta, p.balance, p.desc).catch((err) => {
+        console.warn('[FCM] mileage bulk 알림 실패:', p.userId, err);
+      });
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (/^행 \d+:/.test(msg)) {
