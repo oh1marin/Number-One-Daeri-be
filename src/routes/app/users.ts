@@ -117,10 +117,53 @@ router.delete("/me", async (req, res) => {
     }
     // 전화번호 가입 유저는 비밀번호 없이 토큰 인증만으로 삭제
 
-    await prisma.user.update({
-      where: { id: userId },
-      data: { deletedAt: new Date() },
+    const phoneDigits = user.phone ? String(user.phone).replace(/\D/g, "").trim() : "";
+
+    await prisma.$transaction(async (tx) => {
+      // rides는 운영 데이터 보존을 위해 "익명화"(userId null + 연락처 제거)
+      await tx.ride.updateMany({
+        where: { userId },
+        data: { userId: null, phone: null, customerName: "탈퇴회원" },
+      });
+
+      // 추천/피추천 관계는 FK 제약 때문에 먼저 정리
+      await tx.userReferral.deleteMany({
+        where: { OR: [{ referrerId: userId }, { referredId: userId }] },
+      });
+      await tx.referrerTierBonus.deleteMany({ where: { referrerId: userId } });
+
+      // 세션/토큰/로그
+      await tx.userPushToken.deleteMany({ where: { userId } });
+      await tx.userRefreshToken.deleteMany({ where: { userId } });
+      await tx.userLoginLog.deleteMany({ where: { userId } });
+
+      // 유저 소유 데이터
+      await tx.mileageHistory.deleteMany({ where: { userId } });
+      await tx.withdrawal.deleteMany({ where: { userId } });
+      await tx.userInquiry.deleteMany({ where: { userId } });
+      await tx.complaint.deleteMany({ where: { userId } });
+      await tx.userCoupon.deleteMany({ where: { userId } });
+      await tx.cashReceipt.deleteMany({ where: { userId } });
+      await tx.payment.deleteMany({ where: { userId } });
+      await tx.userCard.deleteMany({ where: { userId } });
+
+      // phone OTP 정리 (phone 기반)
+      if (phoneDigits) {
+        await tx.phoneOtp.deleteMany({ where: { phone: phoneDigits } });
+
+        // 앱 가입 시 생성했던 Customer(관리대장)도 best-effort 제거
+        await tx.customer.deleteMany({
+          where: {
+            category: "앱회원",
+            OR: [{ phone: phoneDigits }, { mobile: phoneDigits }],
+          },
+        });
+      }
+
+      // 마지막으로 유저 삭제(하드 삭제)
+      await tx.user.delete({ where: { id: userId } });
     });
+
     res.json({ success: true, data: { message: "계정이 삭제되었습니다." } });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });
