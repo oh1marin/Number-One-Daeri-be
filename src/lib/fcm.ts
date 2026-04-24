@@ -62,8 +62,14 @@ export async function sendMileageAdjustNotification(
     tokens.map((t) =>
       messaging.send({
         token: t.token,
+        // data-only는 백그라운드/종료 상태에서 OS가 알림을 자동 표시하지 않을 수 있어
+        // notification을 함께 포함(데이터 라우팅은 data 유지)
+        notification: { title, body },
         data,
-        android: { priority: 'high' },
+        android: {
+          priority: 'high',
+          notification: { title, body, sound: 'default' },
+        },
         apns: {
           headers: { 'apns-priority': '10' },
           payload: { aps: { sound: 'default' } },
@@ -77,5 +83,20 @@ export async function sendMileageAdjustNotification(
     console.warn(
       `[FCM] mileage 알림 일부 실패 userId=${userId} 실패=${failed}/${tokens.length}`,
     );
+  }
+
+  // UNREGISTERED 등 영구 실패 토큰 정리(다음 발송 성공률 개선)
+  const invalidTokens: string[] = [];
+  results.forEach((r, idx) => {
+    if (r.status !== 'rejected') return;
+    const e = r.reason as { errorInfo?: { code?: string } } | undefined;
+    const code = e?.errorInfo?.code ?? '';
+    if (code === 'messaging/registration-token-not-registered') {
+      invalidTokens.push(tokens[idx]!.token);
+    }
+  });
+  if (invalidTokens.length > 0) {
+    await prisma.userPushToken.deleteMany({ where: { token: { in: invalidTokens } } });
+    console.warn(`[FCM] UNREGISTERED 토큰 정리 userId=${userId} count=${invalidTokens.length}`);
   }
 }
