@@ -106,6 +106,18 @@ router.post('/phone/verify', async (req, res) => {
             mileageBalance: INITIAL_MILEAGE,
           },
         });
+        // 관리대장(Customer)에도 같이 생성해 관리자에서 바로 조회/관리 가능하게 함
+        await tx.customer.create({
+          data: {
+            registeredAt: new Date(),
+            dmSend: false,
+            smsSend: false,
+            category: '앱회원',
+            name: u.name,
+            phone: normalized,
+            mobile: normalized,
+          },
+        });
         await tx.mileageHistory.create({
           data: {
             userId: u.id,
@@ -182,24 +194,38 @@ router.post('/register', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(String(password), 10);
     const INITIAL_MILEAGE = 10000; // 앱 다운로드 시 10,000원 적립
-    const user = await prisma.user.create({
-      data: {
-        email: String(email).trim().toLowerCase(),
-        password: hashedPassword,
-        name: String(name).trim(),
-        phone: phone ? String(phone).trim() : null,
-        mileageBalance: INITIAL_MILEAGE,
-      },
-    });
-
-    await prisma.mileageHistory.create({
-      data: {
-        userId: user.id,
-        type: 'earn',
-        amount: INITIAL_MILEAGE,
-        balance: INITIAL_MILEAGE,
-        description: '앱 가입 완료 보너스',
-      },
+    const trimmedPhone = phone ? String(phone).replace(/\D/g, '').trim() : null;
+    const user = await prisma.$transaction(async (tx) => {
+      const u = await tx.user.create({
+        data: {
+          email: String(email).trim().toLowerCase(),
+          password: hashedPassword,
+          name: String(name).trim(),
+          phone: trimmedPhone,
+          mileageBalance: INITIAL_MILEAGE,
+        },
+      });
+      await tx.customer.create({
+        data: {
+          registeredAt: new Date(),
+          dmSend: false,
+          smsSend: false,
+          category: '앱회원',
+          name: u.name,
+          phone: trimmedPhone,
+          mobile: trimmedPhone,
+        },
+      });
+      await tx.mileageHistory.create({
+        data: {
+          userId: u.id,
+          type: 'earn',
+          amount: INITIAL_MILEAGE,
+          balance: INITIAL_MILEAGE,
+          description: '앱 가입 완료 보너스',
+        },
+      });
+      return u;
     });
 
     const payload = { userId: user.id, email: user.email ?? undefined };
