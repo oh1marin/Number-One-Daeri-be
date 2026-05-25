@@ -3,26 +3,6 @@ import { prisma } from '../../lib/prisma';
 
 const router = Router();
 
-async function ensureCouponDeliveryColumns() {
-  // DB 마이그레이션이 아직 적용 전이어도 런타임에서 안전하게 열을 생성
-  // (개발/테스트 환경에서 prisma generate/배포 타이밍 불일치 대응)
-  await prisma.$executeRawUnsafe(
-    'ALTER TABLE "user_coupons" ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP'
-  );
-  await prisma.$executeRawUnsafe(
-    'ALTER TABLE "user_coupons" ADD COLUMN IF NOT EXISTS "status" TEXT NOT NULL DEFAULT \'active\''
-  );
-  await prisma.$executeRawUnsafe(
-    'ALTER TABLE "user_coupons" ADD COLUMN IF NOT EXISTS "redeemedAt" TIMESTAMP(3)'
-  );
-  await prisma.$executeRawUnsafe(
-    'ALTER TABLE "user_coupons" ADD COLUMN IF NOT EXISTS "deliveredAt" TIMESTAMP(3)'
-  );
-  await prisma.$executeRawUnsafe(
-    'UPDATE "user_coupons" SET "status" = \'active\' WHERE "status" IS NULL'
-  );
-}
-
 // POST /coupons/register — 쿠폰 등록
 router.post('/register', async (req, res) => {
   try {
@@ -77,8 +57,6 @@ router.post('/register', async (req, res) => {
 // FE 흐름: active → pending_delivery →(관리자 발송완료)→ delivered
 router.post('/:id/redeem', async (req, res) => {
   try {
-    await ensureCouponDeliveryColumns();
-
     const userId = req.user!.id;
     const userCouponId = String(req.params.id).trim();
     const isMock = userCouponId.startsWith('mock_');

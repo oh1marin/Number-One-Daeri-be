@@ -176,10 +176,13 @@ model Ride {
 
   @@unique([userId, clientCallId])
   @@index([date])
+  @@index([createdAt])
   @@index([customerId])
   @@index([userId])
   @@index([driverId])
   @@index([status])
+  @@index([userId, status])
+  @@index([driverId, status])
   @@map("rides")
 }
 
@@ -320,6 +323,7 @@ model User {
   cashReceipts      CashReceipt[]
   pushTokens        UserPushToken[]
 
+  @@index([deletedAt])
   @@map("users")
 }
 
@@ -589,6 +593,8 @@ model Coupon {
   type      String   @default("other") // starbucks | chicken | convenience | giftcard | other
   imageUrl  String?
   amount    Int      // 쿠폰 금액(원) — 마일리지 잔액과 별도
+  /// 기프티쇼 상품코드 (예: G00000280811) — send API goods_code
+  giftishowGoodsCode String?
   validUntil DateTime?
   createdAt DateTime @default(now())
 
@@ -611,10 +617,16 @@ model UserCoupon {
   status      String   @default("active")
   redeemedAt  DateTime?
   deliveredAt DateTime?
+  /// 기프티쇼 대사 TR_ID (send 시 tr_id)
+  giftishowTrId       String?  @unique
+  giftishowSendBasicCd String?
+  deliveryError       String?
 
   @@unique([userId, couponId])
   @@index([userId])
   @@index([createdAt])
+  @@index([status])
+  @@index([redeemedAt])
   @@map("user_coupons")
 }
 
@@ -774,6 +786,7 @@ model PhoneOtp {
   createdAt DateTime @default(now())
 
   @@index([phone])
+  @@index([phone, createdAt])
   @@map("phone_otps")
 }
 

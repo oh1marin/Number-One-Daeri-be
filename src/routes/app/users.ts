@@ -8,24 +8,6 @@ const router = Router();
 
 const MIN_BALANCE_FOR_WITHDRAW = 0; // 전액 출금 가능
 
-async function ensureUserCouponDeliveryColumns() {
-  await prisma.$executeRawUnsafe(
-    'ALTER TABLE "user_coupons" ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP'
-  );
-  await prisma.$executeRawUnsafe(
-    'ALTER TABLE "user_coupons" ADD COLUMN IF NOT EXISTS "status" TEXT NOT NULL DEFAULT \'active\''
-  );
-  await prisma.$executeRawUnsafe(
-    'ALTER TABLE "user_coupons" ADD COLUMN IF NOT EXISTS "redeemedAt" TIMESTAMP(3)'
-  );
-  await prisma.$executeRawUnsafe(
-    'ALTER TABLE "user_coupons" ADD COLUMN IF NOT EXISTS "deliveredAt" TIMESTAMP(3)'
-  );
-  await prisma.$executeRawUnsafe(
-    'UPDATE "user_coupons" SET "status" = \'active\' WHERE "status" IS NULL'
-  );
-}
-
 // PATCH /users/me — 프로필 수정 (이름 등)
 router.patch("/me", async (req, res) => {
   try {
@@ -201,8 +183,6 @@ router.get("/me/mileage", async (req, res) => {
 router.get("/me/coupons", async (req, res) => {
   try {
     const userId = req.user!.id;
-
-    await ensureUserCouponDeliveryColumns();
 
     const userCoupons = await prisma.userCoupon.findMany({
       where: {

@@ -299,17 +299,27 @@ export async function fetchSolapiMessageList(
     statusCode?: string;
     errorCode?: string;
     statusMessage?: string;
-    messageList?: unknown[];
+    messageList?: unknown[] | Record<string, unknown>;
     nextKey?: string;
   };
 
-  const ok = res.status === 200 && (data.statusCode === '2000' || Array.isArray(data.messageList));
+  const ok =
+    res.status === 200 &&
+    (data.statusCode === '2000' ||
+      Array.isArray(data.messageList) ||
+      (data.messageList != null && typeof data.messageList === 'object'));
   if (!ok) {
     throw new Error(data.statusMessage || data.errorCode || 'Solapi 목록 조회 실패');
   }
 
+  const list = Array.isArray(data.messageList)
+    ? data.messageList
+    : data.messageList && typeof data.messageList === 'object'
+      ? Object.values(data.messageList)
+      : [];
+
   return {
-    list: data.messageList ?? [],
+    list,
     nextKey: data.nextKey,
   };
 }

@@ -259,7 +259,7 @@ router.get('/', async (_req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { code, amount, validUntil, name, type, imageUrl } = req.body;
+    const { code, amount, validUntil, name, type, imageUrl, giftishowGoodsCode } = req.body;
     if (!code) return res.status(400).json({ success: false, error: 'code 필수' });
     const coupon = await prisma.coupon.create({
       data: {
@@ -269,6 +269,9 @@ router.post('/', async (req, res) => {
         ...(name != null && { name: String(name).trim() || null }),
         ...(type != null && { type: normalizeCouponType(String(type)) }),
         ...(imageUrl != null && { imageUrl: String(imageUrl).trim() || null }),
+        ...(giftishowGoodsCode != null && {
+          giftishowGoodsCode: String(giftishowGoodsCode).trim() || null,
+        }),
       },
     });
     res.status(201).json({ success: true, data: coupon });
@@ -279,7 +282,7 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
-    const { code, amount, validUntil, name, type, imageUrl } = req.body;
+    const { code, amount, validUntil, name, type, imageUrl, giftishowGoodsCode } = req.body;
     const coupon = await prisma.coupon.update({
       where: { id: req.params.id },
       data: {
@@ -289,6 +292,9 @@ router.put('/:id', async (req, res) => {
         ...(name !== undefined && { name: name ? String(name).trim() : null }),
         ...(type !== undefined && { type: normalizeCouponType(String(type)) }),
         ...(imageUrl !== undefined && { imageUrl: imageUrl ? String(imageUrl).trim() : null }),
+        ...(giftishowGoodsCode !== undefined && {
+          giftishowGoodsCode: giftishowGoodsCode ? String(giftishowGoodsCode).trim() : null,
+        }),
       },
     });
     res.json({ success: true, data: coupon });
