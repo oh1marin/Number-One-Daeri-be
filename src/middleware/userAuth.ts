@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../lib/prisma';
+import { jsonError } from '../lib/jsonError';
 import { verifyAccessToken, TokenPayload } from '../utils/jwt';
 
 declare global {
@@ -18,7 +19,7 @@ export async function userAuthMiddleware(
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
-      res.status(401).json({ success: false, error: '인증이 필요합니다.' });
+      jsonError(res, 401, '인증이 필요합니다.', { code: 'AUTH_REQUIRED' });
       return;
     }
 
@@ -26,7 +27,7 @@ export async function userAuthMiddleware(
     const payload = verifyAccessToken(token) as TokenPayload;
 
     if (!payload.userId) {
-      res.status(401).json({ success: false, error: '유효하지 않은 토큰입니다.' });
+      jsonError(res, 401, '유효하지 않은 토큰입니다.', { code: 'TOKEN_INVALID', clearSession: true });
       return;
     }
 
@@ -35,13 +36,16 @@ export async function userAuthMiddleware(
     });
 
     if (!user) {
-      res.status(401).json({ success: false, error: '사용자를 찾을 수 없습니다.' });
+      jsonError(res, 401, '사용자를 찾을 수 없습니다. 다시 로그인해 주세요.', {
+        code: 'ACCOUNT_DELETED',
+        clearSession: true,
+      });
       return;
     }
 
     req.user = { id: user.id, email: user.email ?? undefined, phone: user.phone ?? undefined, name: user.name };
     next();
   } catch {
-    res.status(401).json({ success: false, error: '유효하지 않은 토큰입니다.' });
+    jsonError(res, 401, '유효하지 않은 토큰입니다.', { code: 'TOKEN_INVALID', clearSession: true });
   }
 }

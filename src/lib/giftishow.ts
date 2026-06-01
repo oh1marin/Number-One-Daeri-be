@@ -303,4 +303,65 @@ export function defaultGiftishowMms(couponName: string, amount: number): { title
   };
 }
 
+export type GifticonProductDto = {
+  id: string;
+  goodsCode: string;
+  name: string;
+  brandName: string;
+  price: number;
+  imageUrl: string | null;
+  category: string;
+  available: boolean;
+};
+
+function parsePrice(raw: Record<string, unknown>): number {
+  const n = Number(raw.realPrice ?? raw.salePrice ?? raw.discountPrice ?? raw.sellPriceAmt ?? 0);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+}
+
+/** 기프티쇼 goodsList 항목 → 앱 gifticon/products DTO */
+export function mapGiftishowGoodsToProduct(raw: Record<string, unknown>): GifticonProductDto | null {
+  const goodsCode = String(raw.goodsCode ?? raw.goodsCd ?? '').trim();
+  if (!goodsCode) return null;
+  const price = parsePrice(raw);
+  const state = String(raw.goodsStateCd ?? 'SALE').toUpperCase();
+  return {
+    id: goodsCode,
+    goodsCode,
+    name: String(raw.goodsName ?? raw.goodsNm ?? goodsCode),
+    brandName: String(raw.brandName ?? raw.brandNm ?? ''),
+    price,
+    imageUrl:
+      String(raw.goodsImgS ?? raw.mmsGoodsImg ?? raw.goodsImgB ?? '').trim() || null,
+    category: String(raw.goodsTypeDtlNm ?? raw.goodstypeNm ?? raw.goodsTypeNm ?? 'other'),
+    available: state === 'SALE' && price > 0,
+  };
+}
+
+/** goodsCode 로 기프티쇼 상품 조회 (목록 페이지 순회) */
+export async function giftishowFindProduct(goodsCode: string): Promise<GifticonProductDto | null> {
+  const code = goodsCode.trim().toUpperCase();
+  let start = 1;
+  const size = 50;
+  for (let page = 0; page < 10; page++) {
+    const { list } = await giftishowListGoods(start, size);
+    for (const item of list) {
+      if (typeof item !== 'object' || item == null) continue;
+      const mapped = mapGiftishowGoodsToProduct(item as Record<string, unknown>);
+      if (mapped?.goodsCode.toUpperCase() === code) return mapped;
+    }
+    if (list.length < size) break;
+    start += size;
+  }
+  return null;
+}
+
+export function buildGifticonOrderTrId(orderId: string): string {
+  const prefix = 'RIDE_GC_';
+  const id = String(orderId).replace(/[^a-zA-Z0-9]/g, '');
+  const maxLen = 40;
+  const raw = prefix + id;
+  return raw.length <= maxLen ? raw : prefix + id.slice(-(maxLen - prefix.length));
+}
+
 export { getBizUserId, getCallbackNo, getDevYn };

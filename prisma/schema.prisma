@@ -322,6 +322,7 @@ model User {
   userCoupons       UserCoupon[]
   cashReceipts      CashReceipt[]
   pushTokens        UserPushToken[]
+  gifticonOrders    GifticonOrder[]
 
   @@index([deletedAt])
   @@map("users")
@@ -628,6 +629,32 @@ model UserCoupon {
   @@index([status])
   @@index([redeemedAt])
   @@map("user_coupons")
+}
+
+// ─────────────────────────────────────
+// GIFTICON (마일리지 → 기프티콘 교환)
+// ─────────────────────────────────────
+
+model GifticonOrder {
+  id                   String    @id @default(cuid())
+  userId               String
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  goodsCode            String
+  goodsName            String
+  brandName            String?
+  imageUrl             String?
+  price                Int       // 차감 마일리지(원)
+  status               String    @default("pending") // pending | completed | failed
+  giftishowTrId        String?   @unique
+  giftishowSendBasicCd String?
+  errorMessage         String?
+  createdAt            DateTime  @default(now())
+  deliveredAt          DateTime?
+
+  @@index([userId])
+  @@index([userId, createdAt])
+  @@index([status])
+  @@map("gifticon_orders")
 }
 
 // ─────────────────────────────────────

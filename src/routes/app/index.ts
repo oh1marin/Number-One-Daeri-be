@@ -21,6 +21,7 @@ import ai from './ai';
 import receipts from './receipts';
 import storage from './storage';
 import pushTokens from './pushTokens';
+import gifticon from './gifticon';
 import { userAuthMiddleware } from '../../middleware/userAuth';
 
 const router = Router();
@@ -67,6 +68,7 @@ router.use('/referrals', referrals);
 router.use('/inquiries', inquiries);
 router.use('/complaints', complaints);
 router.use('/coupons', coupons);
+router.use('/gifticon', gifticon);
 router.use('/receipts', receipts);
 router.use('/storage', storage);
 router.use('/ai', ai);

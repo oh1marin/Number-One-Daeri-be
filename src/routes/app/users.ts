@@ -146,7 +146,12 @@ router.delete("/me", async (req, res) => {
       await tx.user.delete({ where: { id: userId } });
     });
 
-    res.json({ success: true, data: { message: "계정이 삭제되었습니다." } });
+    res.json({
+      success: true,
+      code: "ACCOUNT_DELETED",
+      clearSession: true,
+      data: { message: "계정이 삭제되었습니다." },
+    });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });
   }

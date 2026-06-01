@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma';
+import { jsonError } from '../lib/jsonError';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt';
 import { generateOtpCode, getOtpExpireMinutes, sendSmsOtp } from '../lib/sms';
 
@@ -341,12 +342,21 @@ router.post('/refresh', async (req, res) => {
       where: { token: refreshToken },
     });
     if (!stored || stored.userId !== payload.userId) {
-      res.status(401).json({ success: false, error: '유효하지 않은 리프레시 토큰' });
+      const gone = payload.userId
+        ? !(await prisma.user.findFirst({
+            where: { id: payload.userId, deletedAt: null },
+            select: { id: true },
+          }))
+        : false;
+      jsonError(res, 401, gone ? '계정이 삭제되었습니다. 다시 로그인해 주세요.' : '유효하지 않은 리프레시 토큰', {
+        code: gone ? 'ACCOUNT_DELETED' : 'SESSION_INVALID',
+        clearSession: true,
+      });
       return;
     }
     if (stored.expiresAt < new Date()) {
       await prisma.userRefreshToken.delete({ where: { id: stored.id } });
-      res.status(401).json({ success: false, error: '리프레시 토큰 만료' });
+      jsonError(res, 401, '리프레시 토큰 만료', { code: 'SESSION_EXPIRED', clearSession: true });
       return;
     }
 
@@ -357,7 +367,7 @@ router.post('/refresh', async (req, res) => {
     });
     res.json({ success: true, data: { accessToken } });
   } catch {
-    res.status(401).json({ success: false, error: '유효하지 않은 토큰' });
+    jsonError(res, 401, '유효하지 않은 토큰', { code: 'TOKEN_INVALID', clearSession: true });
   }
 });
 
@@ -365,7 +375,7 @@ router.post('/refresh', async (req, res) => {
 router.get('/me', async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
-    res.status(401).json({ success: false, error: '인증 필요' });
+    jsonError(res, 401, '인증 필요', { code: 'AUTH_REQUIRED' });
     return;
   }
   try {
@@ -376,7 +386,10 @@ router.get('/me', async (req, res) => {
       select: { id: true, email: true, name: true, phone: true, mileageBalance: true },
     });
     if (!user) {
-      res.status(401).json({ success: false, error: '사용자 없음' });
+      jsonError(res, 401, '사용자 없음. 다시 로그인해 주세요.', {
+        code: 'ACCOUNT_DELETED',
+        clearSession: true,
+      });
       return;
     }
     res.json({
@@ -390,7 +403,7 @@ router.get('/me', async (req, res) => {
       },
     });
   } catch {
-    res.status(401).json({ success: false, error: '유효하지 않은 토큰' });
+    jsonError(res, 401, '유효하지 않은 토큰', { code: 'TOKEN_INVALID', clearSession: true });
   }
 });
 

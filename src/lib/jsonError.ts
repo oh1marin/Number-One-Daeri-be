@@ -1,8 +1,19 @@
 import type { Response } from 'express';
 
 /** 관리자·앱 공통: 프론트가 `error` 또는 `message` 중 아무거나 읽도록 동일 문자열 유지 */
-export function jsonError(res: Response, status: number, error: string): void {
-  res.status(status).json({ success: false, error, message: error });
+export function jsonError(
+  res: Response,
+  status: number,
+  error: string,
+  opts?: { code?: string; clearSession?: boolean }
+): void {
+  res.status(status).json({
+    success: false,
+    error,
+    message: error,
+    ...(opts?.code ? { code: opts.code } : {}),
+    ...(opts?.clearSession ? { clearSession: true } : {}),
+  });
 }
 
 export function jsonServerError(res: Response, e: unknown): void {
