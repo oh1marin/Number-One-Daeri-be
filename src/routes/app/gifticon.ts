@@ -80,39 +80,60 @@ function formatOrder(row: {
   };
 }
 
-// GET /gifticon/products — 기프티쇼 0101 (미설정 시 DB 쿠폰 catalog 폴백)
+function toAppProductItem(p: GifticonProductDto) {
+  const imageUrl = p.imageUrl?.trim() || null;
+  return {
+    id: p.goodsCode,
+    goodsCode: p.goodsCode,
+    name: p.name,
+    price: p.price,
+    mileagePrice: p.price,
+    imageUrl,
+    available: p.available,
+  };
+}
+
+// GET /gifticon/products — 앱 상점: 관리자 DB 등록 상품만 노출 (기프티쇼는 교환 발송용)
 router.get('/products', async (req, res) => {
   try {
     const start = Math.max(1, Number(req.query.start ?? req.query.page) || 1);
     const size = Math.min(100, Math.max(1, Number(req.query.size ?? req.query.limit) || 50));
 
-    if (isGiftishowEnabled()) {
-      try {
-        const { list, listNum } = await giftishowListGoods(start, size);
-        const items = list
-          .map((item) =>
-            typeof item === 'object' && item != null
-              ? mapGiftishowGoodsToProduct(item as Record<string, unknown>)
-              : null
-          )
-          .filter((p): p is GifticonProductDto => p != null && p.available);
+    const dbAll = await listProductsFromDb();
+    let source: 'db' | 'giftishow' = 'db';
+    let catalog = dbAll;
 
-        res.json({
-          success: true,
-          data: { items, total: listNum ?? items.length, start, size },
-        });
-        return;
+    // 관리자 등록 상품이 없을 때만 기프티쇼 목록 폴백
+    if (catalog.length === 0 && isGiftishowEnabled()) {
+      try {
+        const giftishowAll: GifticonProductDto[] = [];
+        let gsStart = 1;
+        const gsSize = 50;
+        for (let page = 0; page < 10; page++) {
+          const { list } = await giftishowListGoods(gsStart, gsSize);
+          const chunk = list
+            .map((item) =>
+              typeof item === 'object' && item != null
+                ? mapGiftishowGoodsToProduct(item as Record<string, unknown>)
+                : null
+            )
+            .filter((p): p is GifticonProductDto => p != null && p.available);
+          giftishowAll.push(...chunk);
+          if (list.length < gsSize) break;
+          gsStart += gsSize;
+        }
+        catalog = giftishowAll;
+        source = 'giftishow';
       } catch (e) {
-        console.warn('[gifticon/products] Giftishow 실패, DB 폴백:', e);
+        console.warn('[gifticon/products] Giftishow 실패:', e);
       }
     }
 
-    const all = await listProductsFromDb();
     const skip = (start - 1) * size;
-    const items = all.slice(skip, skip + size);
+    const items = catalog.slice(skip, skip + size).map(toAppProductItem);
     res.json({
       success: true,
-      data: { items, total: all.length, start, size, source: 'db' },
+      data: { items, total: catalog.length, start, size, source },
     });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });
