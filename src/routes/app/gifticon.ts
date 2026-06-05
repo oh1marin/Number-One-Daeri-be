@@ -5,11 +5,9 @@ import {
   buildGifticonOrderTrId,
   defaultGiftishowMms,
   giftishowFindProduct,
-  giftishowListGoods,
   giftishowSend,
   giftishowVerifySendSuccess,
   isGiftishowEnabled,
-  mapGiftishowGoodsToProduct,
   type GifticonProductDto,
   getBizUserId,
   getCallbackNo,
@@ -23,11 +21,32 @@ function resolveGoodsCode(body: Record<string, unknown>): string {
   return String(raw ?? '').trim().toUpperCase();
 }
 
+function resolveGoodsCodeFromCoupon(row: {
+  code: string;
+  giftishowGoodsCode: string | null;
+}): string {
+  const fromGs = String(row.giftishowGoodsCode ?? '').trim();
+  if (fromGs) return fromGs.toUpperCase();
+  const code = String(row.code ?? '').trim();
+  if (code.toUpperCase().startsWith('GIFTICON_')) {
+    return code.slice('GIFTICON_'.length).trim().toUpperCase();
+  }
+  return '';
+}
+
+/** 관리자 등록 기프티콘 상품 — 기프티쇼 API 연동 여부와 무관 */
 async function listProductsFromDb(): Promise<GifticonProductDto[]> {
   const coupons = await prisma.coupon.findMany({
     where: {
-      giftishowGoodsCode: { not: null },
-      OR: [{ validUntil: null }, { validUntil: { gt: new Date() } }],
+      AND: [
+        {
+          OR: [
+            { giftishowGoodsCode: { not: null } },
+            { code: { startsWith: 'GIFTICON_', mode: 'insensitive' } },
+          ],
+        },
+        { OR: [{ validUntil: null }, { validUntil: { gt: new Date() } }] },
+      ],
     },
     orderBy: { amount: 'asc' },
     take: 200,
@@ -35,11 +54,12 @@ async function listProductsFromDb(): Promise<GifticonProductDto[]> {
 
   return coupons
     .map((c) => {
-      const goodsCode = c.giftishowGoodsCode!.trim();
+      const goodsCode = resolveGoodsCodeFromCoupon(c);
+      if (!goodsCode) return null;
       return {
         id: goodsCode,
         goodsCode,
-        name: c.name ?? c.code,
+        name: c.name ?? goodsCode,
         brandName: '',
         price: c.amount,
         imageUrl: c.imageUrl,
@@ -47,7 +67,7 @@ async function listProductsFromDb(): Promise<GifticonProductDto[]> {
         available: c.amount > 0,
       } satisfies GifticonProductDto;
     })
-    .filter((p) => p.goodsCode.length > 0);
+    .filter((p): p is GifticonProductDto => p != null && p.goodsCode.length > 0);
 }
 
 function formatOrder(row: {
@@ -93,47 +113,18 @@ function toAppProductItem(p: GifticonProductDto) {
   };
 }
 
-// GET /gifticon/products — 앱 상점: 관리자 DB 등록 상품만 노출 (기프티쇼는 교환 발송용)
+// GET /gifticon/products — 앱 상점: 관리자 DB 등록 상품만 (기프티쇼 API 미사용)
 router.get('/products', async (req, res) => {
   try {
     const start = Math.max(1, Number(req.query.start ?? req.query.page) || 1);
     const size = Math.min(100, Math.max(1, Number(req.query.size ?? req.query.limit) || 50));
 
-    const dbAll = await listProductsFromDb();
-    let source: 'db' | 'giftishow' = 'db';
-    let catalog = dbAll;
-
-    // 관리자 등록 상품이 없을 때만 기프티쇼 목록 폴백
-    if (catalog.length === 0 && isGiftishowEnabled()) {
-      try {
-        const giftishowAll: GifticonProductDto[] = [];
-        let gsStart = 1;
-        const gsSize = 50;
-        for (let page = 0; page < 10; page++) {
-          const { list } = await giftishowListGoods(gsStart, gsSize);
-          const chunk = list
-            .map((item) =>
-              typeof item === 'object' && item != null
-                ? mapGiftishowGoodsToProduct(item as Record<string, unknown>)
-                : null
-            )
-            .filter((p): p is GifticonProductDto => p != null && p.available);
-          giftishowAll.push(...chunk);
-          if (list.length < gsSize) break;
-          gsStart += gsSize;
-        }
-        catalog = giftishowAll;
-        source = 'giftishow';
-      } catch (e) {
-        console.warn('[gifticon/products] Giftishow 실패:', e);
-      }
-    }
-
+    const catalog = await listProductsFromDb();
     const skip = (start - 1) * size;
     const items = catalog.slice(skip, skip + size).map(toAppProductItem);
     res.json({
       success: true,
-      data: { items, total: catalog.length, start, size, source },
+      data: { items, total: catalog.length, start, size, source: 'db' },
     });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });
