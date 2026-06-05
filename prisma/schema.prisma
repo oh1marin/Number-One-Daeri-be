@@ -363,14 +363,15 @@ model UserRefreshToken {
 // ─────────────────────────────────────
 
 model Notice {
-  id         String   @id @default(cuid())
-  title      String
-  content    String
-  badge      String?  @default("공지")
-  badgeColor String?  @default("bg-red-100 text-red-600")
-  views      Int      @default(0)
-  events     Json?    // [{title, date, desc}]
-  createdAt  DateTime @default(now())
+  id            String   @id @default(cuid())
+  title         String
+  content       String
+  badge         String?  @default("공지")
+  badgeColor    String?  @default("bg-red-100 text-red-600")
+  views         Int      @default(0)
+  coverImageUrl String?
+  events        Json?    // [{title, date, desc, imageUrl?}]
+  createdAt     DateTime @default(now())
 
   @@index([createdAt])
   @@map("notices")

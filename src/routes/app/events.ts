@@ -145,10 +145,12 @@ router.get('/', async (req, res) => {
           if (Number.isFinite(endDate.getTime()) && endDate.getTime() < now.getTime()) return;
         }
 
+        const imageRaw = String((e as Record<string, unknown>)?.imageUrl ?? '').trim();
+
         flattened.push({
           id: `${n.id}:${idx}`,
           title,
-          imageUrl: null,
+          imageUrl: imageRaw || null,
           startAt,
           endAt,
           url: null,

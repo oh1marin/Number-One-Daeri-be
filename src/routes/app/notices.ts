@@ -5,24 +5,7 @@
  */
 import { Router } from 'express';
 import { prisma } from '../../lib/prisma';
-
-type NoticeRow = { id: string; title: string; content: string; createdAt: Date; badge?: string | null; badgeColor?: string | null; views: number; events?: unknown };
-
-/** 공지 응답 포맷 (웹·앱 공용) */
-function formatNotice(n: NoticeRow) {
-  const date = n.createdAt.toISOString().slice(0, 10).replace(/-/g, '.');
-  const events = (Array.isArray(n.events) ? n.events : []) as Array<{ title?: string; date?: string; desc?: string }>;
-  return {
-    id: n.id,
-    badge: n.badge ?? '공지',
-    badgeColor: n.badgeColor ?? 'bg-red-100 text-red-600',
-    title: n.title,
-    date,
-    views: n.views ?? 0,
-    content: n.content,
-    events: events.length ? events : [{ title: '', date: '', desc: '' }],
-  };
-}
+import { formatNotice } from '../../lib/noticeFormat';
 
 const router = Router();
 

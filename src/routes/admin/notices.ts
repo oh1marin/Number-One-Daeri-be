@@ -1,23 +1,8 @@
 import { Router } from 'express';
 import { prisma } from '../../lib/prisma';
+import { formatNotice } from '../../lib/noticeFormat';
 
 const router = Router();
-
-/** 공지 응답 포맷 */
-function formatNotice(n: { id: string; title: string; content: string; createdAt: Date; badge?: string | null; badgeColor?: string | null; views: number; events?: unknown }) {
-  const date = n.createdAt.toISOString().slice(0, 10).replace(/-/g, '.');
-  const events = (Array.isArray(n.events) ? n.events : []) as Array<{ title?: string; date?: string; desc?: string }>;
-  return {
-    id: n.id,
-    badge: n.badge ?? '공지',
-    badgeColor: n.badgeColor ?? 'bg-red-100 text-red-600',
-    title: n.title,
-    date,
-    views: n.views ?? 0,
-    content: n.content,
-    events: events.length ? events : [{ title: '', date: '', desc: '' }],
-  };
-}
 
 // GET /admin/notices
 router.get('/', async (req, res) => {
@@ -50,16 +35,21 @@ router.get('/:id', async (req, res) => {
 // POST /admin/notices
 router.post('/', async (req, res) => {
   try {
-    const { title, content, badge, badgeColor, views, events } = req.body;
-    if (!title || !content) return res.status(400).json({ success: false, error: 'title, content 필수' });
+    const { title, content, badge, badgeColor, views, events, coverImageUrl } = req.body;
+    if (!title || !String(title).trim()) {
+      return res.status(400).json({ success: false, error: 'title 필수' });
+    }
     const notice = await prisma.notice.create({
       data: {
-        title: String(title),
-        content: String(content),
+        title: String(title).trim(),
+        content: content != null ? String(content) : '',
         ...(badge != null && { badge: String(badge) }),
         ...(badgeColor != null && { badgeColor: String(badgeColor) }),
         ...(views != null && { views: Number(views) }),
-        ...(events != null && { events: events }),
+        ...(events != null && { events }),
+        ...(coverImageUrl != null && {
+          coverImageUrl: String(coverImageUrl).trim() || null,
+        }),
       },
     });
     res.status(201).json({ success: true, data: formatNotice(notice) });
@@ -71,7 +61,7 @@ router.post('/', async (req, res) => {
 // PUT /admin/notices/:id
 router.put('/:id', async (req, res) => {
   try {
-    const { title, content, badge, badgeColor, views, events } = req.body;
+    const { title, content, badge, badgeColor, views, events, coverImageUrl } = req.body;
     const notice = await prisma.notice.update({
       where: { id: req.params.id },
       data: {
@@ -81,6 +71,9 @@ router.put('/:id', async (req, res) => {
         ...(badgeColor != null && { badgeColor: String(badgeColor) }),
         ...(views != null && { views: Number(views) }),
         ...(events !== undefined && { events }),
+        ...(coverImageUrl !== undefined && {
+          coverImageUrl: coverImageUrl ? String(coverImageUrl).trim() : null,
+        }),
       },
     });
     res.json({ success: true, data: formatNotice(notice) });
