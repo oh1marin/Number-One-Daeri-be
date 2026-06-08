@@ -53,22 +53,22 @@ async function listProductsFromDb(): Promise<GifticonProductDto[]> {
     take: 200,
   });
 
-  return coupons
-    .map((c) => {
-      const goodsCode = resolveGoodsCodeFromCoupon(c);
-      if (!goodsCode) return null;
-      return {
-        id: goodsCode,
-        goodsCode,
-        name: c.name ?? goodsCode,
-        brandName: '',
-        price: c.amount,
-        imageUrl: c.imageUrl,
-        category: inferCouponType(c.code, c.name, c.type),
-        available: c.amount > 0,
-      } satisfies GifticonProductDto;
-    })
-    .filter((p): p is GifticonProductDto => p != null && p.goodsCode.length > 0);
+  const products: GifticonProductDto[] = [];
+  for (const c of coupons) {
+    const goodsCode = resolveGoodsCodeFromCoupon(c);
+    if (!goodsCode) continue;
+    products.push({
+      id: goodsCode,
+      goodsCode,
+      name: c.name ?? goodsCode,
+      brandName: '',
+      price: c.amount,
+      imageUrl: c.imageUrl,
+      category: inferCouponType(c.code, c.name, c.type),
+      available: c.amount > 0,
+    });
+  }
+  return products;
 }
 
 function formatOrder(row: {
