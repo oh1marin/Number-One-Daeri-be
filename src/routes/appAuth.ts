@@ -105,6 +105,7 @@ router.post('/phone/verify', async (req, res) => {
             phone: normalized,
             name: '앱 사용자',
             mileageBalance: INITIAL_MILEAGE,
+            signupBonusRemaining: INITIAL_MILEAGE,
           },
         });
         // 관리대장(Customer)에도 같이 생성해 관리자에서 바로 조회/관리 가능하게 함
@@ -204,6 +205,7 @@ router.post('/register', async (req, res) => {
           name: String(name).trim(),
           phone: trimmedPhone,
           mileageBalance: INITIAL_MILEAGE,
+          signupBonusRemaining: INITIAL_MILEAGE,
         },
       });
       await tx.customer.create({

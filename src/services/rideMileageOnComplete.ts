@@ -1,4 +1,5 @@
 import type { Prisma } from '@prisma/client';
+import { nextSignupBonusAfterRideSpend } from '../lib/mileageBuckets';
 
 async function getAccumulationSettings(tx: Prisma.TransactionClient) {
   let s = await tx.accumulationSettings.findFirst();
@@ -42,9 +43,16 @@ export async function applyRideCompletionMileage(
     });
     if (!dupUse) {
       const newBalance = user.mileageBalance - fareNum;
+      const newSignupRemaining = nextSignupBonusAfterRideSpend(
+        user.signupBonusRemaining ?? 0,
+        fareNum,
+      );
       await tx.user.update({
         where: { id: ride.userId },
-        data: { mileageBalance: newBalance },
+        data: {
+          mileageBalance: newBalance,
+          signupBonusRemaining: newSignupRemaining,
+        },
       });
       await tx.mileageHistory.create({
         data: {

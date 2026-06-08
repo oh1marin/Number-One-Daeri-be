@@ -302,8 +302,10 @@ model User {
   password        String?   // 이메일 가입 시 사용, 전화번호 가입 시 null
   name            String    @default("앱 사용자")
   phone           String?   @unique // 전화번호 가입 시 사용, 이메일 가입 시 선택
-  mileageBalance  Int       @default(10000) // 앱 다운로드 시 10,000원 지급
-  settings        Json?     // { pushEnabled?: boolean } 등
+  mileageBalance         Int @default(10000) // 앱 다운로드 시 10,000원 지급
+  /// 신규 가입 보너스 중 대리운전 전용 잔여 (기존 회원 0 — 기프티콘 제한 없음)
+  signupBonusRemaining   Int @default(0)
+  settings               Json? // { pushEnabled?: boolean } 등
   deletedAt       DateTime? // 계정삭제 시
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt

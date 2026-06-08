@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../../lib/prisma';
 import { inferCouponType } from '../../lib/couponDisplay';
+import { gifticonSpendable } from '../../lib/mileageBuckets';
 import {
   buildGifticonOrderTrId,
   defaultGiftishowMms,
@@ -151,7 +152,13 @@ router.post('/exchange', async (req, res) => {
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, phone: true, mileageBalance: true, name: true },
+      select: {
+        id: true,
+        phone: true,
+        mileageBalance: true,
+        signupBonusRemaining: true,
+        name: true,
+      },
     });
     if (!user) {
       res.status(404).json({ success: false, error: '사용자를 찾을 수 없습니다.' });
@@ -188,10 +195,22 @@ router.post('/exchange', async (req, res) => {
       return;
     }
 
-    if (user.mileageBalance < product.price) {
+    const spendable = gifticonSpendable(
+      user.mileageBalance,
+      user.signupBonusRemaining ?? 0,
+    );
+    if (spendable < product.price) {
+      if (user.mileageBalance >= product.price) {
+        res.status(400).json({
+          success: false,
+          error:
+            '가입 보너스 마일리지는 기프티콘 교환에 사용할 수 없습니다. 대리운전 이용 후 적립된 마일리지로 교환해 주세요.',
+        });
+        return;
+      }
       res.status(400).json({
         success: false,
-        error: `마일리지가 부족합니다. (필요: ${product.price.toLocaleString()}원, 보유: ${user.mileageBalance.toLocaleString()}원)`,
+        error: `마일리지가 부족합니다. (필요: ${product.price.toLocaleString()}원, 교환 가능: ${spendable.toLocaleString()}원)`,
       });
       return;
     }

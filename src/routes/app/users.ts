@@ -168,6 +168,8 @@ router.get("/me/mileage", async (req, res) => {
       return res.status(404).json({ success: false, error: "Not found" });
 
     const balance = user.mileageBalance;
+    const signupBonusRemaining = user.signupBonusRemaining ?? 0;
+    const gifticonSpendable = Math.max(0, balance - Math.max(0, signupBonusRemaining));
     const withdrawable = Math.max(0, balance - MIN_BALANCE_FOR_WITHDRAW);
 
     res.json({
@@ -175,6 +177,8 @@ router.get("/me/mileage", async (req, res) => {
       data: {
         balance,
         withdrawable,
+        signupBonusRemaining,
+        gifticonSpendable,
         /** 순수 마일리지(User.mileageBalance). 쿠폰 금액은 합산하지 않음 — 쿠폰은 GET /users/me/coupons */
         balanceIsMileageOnly: true,
       },
