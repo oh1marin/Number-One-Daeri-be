@@ -182,7 +182,7 @@ function authParams(apiCode: string): Record<string, string> {
   };
 }
 
-/** API 0101 — 상품 목록 */
+/** API 0101 — 상품 목록 (start = 페이지 번호, 1부터) */
 export async function giftishowListGoods(start = 1, size = 20): Promise<{
   list: unknown[];
   listNum?: number;
@@ -388,17 +388,16 @@ export function mapGiftishowGoodsToProduct(raw: Record<string, unknown>): Giftic
 /** goodsCode 로 기프티쇼 상품 조회 (목록 페이지 순회) */
 export async function giftishowFindProduct(goodsCode: string): Promise<GifticonProductDto | null> {
   const code = goodsCode.trim().toUpperCase();
-  let start = 1;
   const size = 50;
-  for (let page = 0; page < 10; page++) {
-    const { list } = await giftishowListGoods(start, size);
+  const maxPages = Math.ceil(2500 / size);
+  for (let page = 1; page <= maxPages; page++) {
+    const { list } = await giftishowListGoods(page, size);
     for (const item of list) {
       if (typeof item !== 'object' || item == null) continue;
       const mapped = mapGiftishowGoodsToProduct(item as Record<string, unknown>);
       if (mapped?.goodsCode.toUpperCase() === code) return mapped;
     }
     if (list.length < size) break;
-    start += size;
   }
   return null;
 }
