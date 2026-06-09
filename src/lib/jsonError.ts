@@ -5,14 +5,19 @@ export function jsonError(
   res: Response,
   status: number,
   error: string,
-  opts?: { code?: string; clearSession?: boolean }
+  opts?: {
+    code?: string;
+    clearSession?: boolean;
+    data?: Record<string, unknown>;
+  }
 ): void {
   res.status(status).json({
     success: false,
     error,
     message: error,
-    ...(opts?.code ? { code: opts.code } : {}),
+    ...(opts?.code ? { code: opts.code, errorCode: opts.code } : {}),
     ...(opts?.clearSession ? { clearSession: true } : {}),
+    ...(opts?.data ? { data: { message: error, ...opts.data } } : {}),
   });
 }
 

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../../lib/prisma';
 import { inferCouponType } from '../../lib/couponDisplay';
+import { jsonError } from '../../lib/jsonError';
 import { gifticonSpendable } from '../../lib/mileageBuckets';
 import {
   buildGifticonOrderTrId,
@@ -159,9 +160,8 @@ router.get('/products', async (req, res) => {
 router.post('/exchange', async (req, res) => {
   try {
     if (!isGiftishowEnabled()) {
-      res.status(503).json({
-        success: false,
-        error: '기프티콘 교환 서비스가 설정되지 않았습니다.',
+      jsonError(res, 503, '기프티콘 교환 서비스가 설정되지 않았습니다.', {
+        code: 'GIFTISHOW_NOT_CONFIGURED',
       });
       return;
     }
@@ -169,7 +169,7 @@ router.post('/exchange', async (req, res) => {
     const userId = req.user!.id;
     const goodsCode = resolveGoodsCode((req.body ?? {}) as Record<string, unknown>);
     if (!goodsCode) {
-      res.status(400).json({ success: false, error: 'goodsCode 또는 productId 필수' });
+      jsonError(res, 400, 'goodsCode 또는 productId 필수', { code: 'INVALID_REQUEST' });
       return;
     }
 
@@ -184,13 +184,15 @@ router.post('/exchange', async (req, res) => {
       },
     });
     if (!user) {
-      res.status(404).json({ success: false, error: '사용자를 찾을 수 없습니다.' });
+      jsonError(res, 404, '사용자를 찾을 수 없습니다.', { code: 'USER_NOT_FOUND' });
       return;
     }
 
     const phone = user.phone?.replace(/\D/g, '') ?? '';
     if (phone.length < 10) {
-      res.status(400).json({ success: false, error: '기프티콘 수신을 위해 전화번호 등록이 필요합니다.' });
+      jsonError(res, 400, '기프티콘 수신을 위해 전화번호 등록이 필요합니다.', {
+        code: 'PHONE_REQUIRED',
+      });
       return;
     }
 
@@ -209,12 +211,12 @@ router.post('/exchange', async (req, res) => {
     }
 
     if (!product || !product.available) {
-      res.status(404).json({ success: false, error: '교환 가능한 상품을 찾을 수 없습니다.' });
+      jsonError(res, 404, '교환 가능한 상품을 찾을 수 없습니다.', { code: 'PRODUCT_NOT_FOUND' });
       return;
     }
 
     if (product.price <= 0) {
-      res.status(400).json({ success: false, error: '상품 가격 정보가 올바르지 않습니다.' });
+      jsonError(res, 400, '상품 가격 정보가 올바르지 않습니다.', { code: 'INVALID_PRODUCT_PRICE' });
       return;
     }
 
@@ -224,17 +226,20 @@ router.post('/exchange', async (req, res) => {
     );
     if (spendable < product.price) {
       if (user.mileageBalance >= product.price) {
-        res.status(400).json({
-          success: false,
-          error:
-            '가입 보너스 마일리지는 기프티콘 교환에 사용할 수 없습니다. 대리운전 이용 후 적립된 마일리지로 교환해 주세요.',
-        });
+        jsonError(
+          res,
+          400,
+          '가입 보너스 마일리지는 기프티콘 교환에 사용할 수 없습니다. 대리운전 이용 후 적립된 마일리지로 교환해 주세요.',
+          { code: 'SIGNUP_BONUS_NOT_SPENDABLE' }
+        );
         return;
       }
-      res.status(400).json({
-        success: false,
-        error: `마일리지가 부족합니다. (필요: ${product.price.toLocaleString()}원, 교환 가능: ${spendable.toLocaleString()}원)`,
-      });
+      jsonError(
+        res,
+        400,
+        `마일리지가 부족합니다. (필요: ${product.price.toLocaleString()}원, 교환 가능: ${spendable.toLocaleString()}원)`,
+        { code: 'INSUFFICIENT_MILEAGE' }
+      );
       return;
     }
 
@@ -324,15 +329,14 @@ router.post('/exchange', async (req, res) => {
         where: { id: order.id },
         data: { status: 'failed', giftishowTrId: trId, errorMessage: formatted.message },
       });
-      res.status(502).json({
-        success: false,
-        error: formatted.message,
-        errorCode: formatted.code,
+      // 502면 앱이 본문 대신 "Bad Gateway"만 보여주는 경우가 많아 400 사용
+      jsonError(res, 400, formatted.message, {
+        code: formatted.code ?? 'GIFTISHOW_SEND_FAILED',
         data: { orderId: order.id, trId },
       });
     }
   } catch (e) {
-    res.status(500).json({ success: false, error: String(e) });
+    jsonError(res, 500, '기프티콘 교환 중 오류가 발생했습니다.');
   }
 });
 

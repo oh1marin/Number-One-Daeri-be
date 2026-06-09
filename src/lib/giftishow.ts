@@ -163,7 +163,7 @@ export function formatGiftishowUserError(
     return {
       message:
         '기프티쇼 발송 잔액(비즈머니)이 부족합니다. 충전 후 다시 시도해 주세요.',
-      code: code ?? 'E0010',
+      code: 'GIFTISHOW_BIZMONEY_INSUFFICIENT',
       detail,
     };
   }
@@ -171,7 +171,7 @@ export function formatGiftishowUserError(
     return {
       message:
         '등록된 상품 코드가 올바르지 않습니다. 관리자 기프티콘 상점에서 G00000… 형식 코드를 확인해 주세요.',
-      code,
+      code: 'GIFTISHOW_INVALID_PRODUCT',
       detail,
     };
   }
