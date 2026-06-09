@@ -114,13 +114,24 @@ export function isGiftishowEnabled(): boolean {
   );
 }
 
-/** user_coupon.id 기반 대사용 TR_ID (기프티쇼 대사값) */
+/** 기프티쇼 tr_id 최대 길이 (초과 시 "TRID is longer than 20 characters") */
+export const GIFTISHOW_TR_ID_MAX_LEN = 20;
+
+function buildGiftishowTrIdWithPrefix(prefix: string, sourceId: string): string {
+  const p = String(prefix).replace(/[^a-zA-Z0-9]/g, '');
+  const id = String(sourceId).replace(/[^a-zA-Z0-9]/g, '');
+  if (!p) {
+    return id.length <= GIFTISHOW_TR_ID_MAX_LEN ? id : id.slice(-GIFTISHOW_TR_ID_MAX_LEN);
+  }
+  const maxIdLen = GIFTISHOW_TR_ID_MAX_LEN - p.length;
+  if (maxIdLen <= 0) return p.slice(0, GIFTISHOW_TR_ID_MAX_LEN);
+  const suffix = id.length <= maxIdLen ? id : id.slice(-maxIdLen);
+  return p + suffix;
+}
+
+/** user_coupon.id 기반 대사용 TR_ID (기프티쇼 대사값, 최대 20자) */
 export function buildGiftishowTrId(userCouponId: string): string {
-  const prefix = 'RIDE_';
-  const id = String(userCouponId).replace(/[^a-zA-Z0-9]/g, '');
-  const maxLen = 40;
-  const raw = prefix + id;
-  return raw.length <= maxLen ? raw : prefix + id.slice(-(maxLen - prefix.length));
+  return buildGiftishowTrIdWithPrefix('R', userCouponId);
 }
 
 function isOk(data: GiftishowBaseResponse): boolean {
@@ -209,6 +220,11 @@ export async function giftishowSend(params: GiftishowSendParams): Promise<Giftis
     throw new Error('유효하지 않은 수신번호');
   }
 
+  const trId = params.trId.trim();
+  if (!trId || trId.length > GIFTISHOW_TR_ID_MAX_LEN) {
+    throw new Error(`tr_id는 1~${GIFTISHOW_TR_ID_MAX_LEN}자여야 합니다.`);
+  }
+
   const body: Record<string, string> = {
     ...authParams(apiCode),
     goods_code: params.goodsCode.trim(),
@@ -216,7 +232,7 @@ export async function giftishowSend(params: GiftishowSendParams): Promise<Giftis
     mms_msg: params.mmsMsg.trim(),
     callback_no: digitsOnly(params.callbackNo),
     phone_no: phone,
-    tr_id: params.trId.trim(),
+    tr_id: trId,
     user_id: params.userId.trim(),
     rev_info_yn: params.revInfoYn ?? 'N',
   };
@@ -388,11 +404,7 @@ export async function giftishowFindProduct(goodsCode: string): Promise<GifticonP
 }
 
 export function buildGifticonOrderTrId(orderId: string): string {
-  const prefix = 'RIDE_GC_';
-  const id = String(orderId).replace(/[^a-zA-Z0-9]/g, '');
-  const maxLen = 40;
-  const raw = prefix + id;
-  return raw.length <= maxLen ? raw : prefix + id.slice(-(maxLen - prefix.length));
+  return buildGiftishowTrIdWithPrefix('GC', orderId);
 }
 
 export { getBizUserId, getCallbackNo, getDevYn };
