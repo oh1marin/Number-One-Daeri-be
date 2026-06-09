@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../../lib/prisma';
 import { normalizeCouponType } from '../../lib/couponDisplay';
+import { kstYearMonth } from '../../lib/kst';
 
 const router = Router();
 
@@ -14,7 +15,10 @@ async function getOrCreateCouponBudget() {
 router.get('/budget', async (_req, res) => {
   try {
     const budget = await getOrCreateCouponBudget();
-    res.json({ success: true, data: { balance: budget.balance, updatedAt: budget.updatedAt } });
+    res.json({
+      success: true,
+      data: { balance: budget.balance, updatedAt: budget.updatedAt.toISOString() },
+    });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });
   }
@@ -53,7 +57,7 @@ router.post('/budget/charge', async (req, res) => {
 
     res.status(201).json({
       success: true,
-      data: { balance: result.balance, updatedAt: result.updatedAt },
+      data: { balance: result.balance, updatedAt: result.updatedAt.toISOString() },
     });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });
@@ -81,7 +85,7 @@ router.get('/budget/history', async (req, res) => {
           amount: x.amount,
           balance: x.balance,
           memo: x.memo,
-          createdAt: x.createdAt,
+          createdAt: x.createdAt.toISOString(),
         })),
       },
     });
@@ -134,10 +138,7 @@ router.get('/purchases', async (req, res) => {
 
     const dataItems = items.map((uc) => {
       const occurredAt = uc.createdAt;
-      const usedYm =
-        occurredAt instanceof Date
-          ? `${occurredAt.getFullYear()}-${String(occurredAt.getMonth() + 1).padStart(2, '0')}`
-          : null;
+      const usedYm = occurredAt instanceof Date ? kstYearMonth(occurredAt) : null;
       return {
         receiptNo: uc.id,
         userId: uc.user.id,
@@ -147,7 +148,7 @@ router.get('/purchases', async (req, res) => {
         event: '적립',
         status: 'completed',
         couponCode: uc.coupon.code,
-        occurredAt,
+        occurredAt: occurredAt.toISOString(),
         usedYearMonth: usedYm,
       };
     });
@@ -205,10 +206,7 @@ router.get('/history', async (req, res) => {
 
     const dataItems = items.map((uc) => {
       const occurredAt = uc.createdAt;
-      const usedYm =
-        occurredAt instanceof Date
-          ? `${occurredAt.getFullYear()}-${String(occurredAt.getMonth() + 1).padStart(2, '0')}`
-          : null;
+      const usedYm = occurredAt instanceof Date ? kstYearMonth(occurredAt) : null;
       return {
         receiptNo: uc.id,
         userId: uc.user.id,
@@ -218,7 +216,7 @@ router.get('/history', async (req, res) => {
         event: '적립',
         status: 'completed',
         couponCode: uc.coupon.code,
-        occurredAt,
+        occurredAt: occurredAt.toISOString(),
         usedYearMonth: usedYm,
       };
     });
