@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../../lib/prisma';
 import {
   buildGiftishowTrId,
+  formatGiftishowUserError,
   defaultGiftishowMms,
   giftishowSend,
   giftishowVerifySendSuccess,
@@ -217,12 +218,23 @@ router.put('/:id/complete', async (req, res) => {
         },
       });
     } catch (sendErr) {
-      const errMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
+      const raw = sendErr instanceof Error ? sendErr.message : String(sendErr);
+      const formatted = formatGiftishowUserError(raw);
+      console.warn('[admin/coupon-requests] giftishow send failed:', {
+        userCouponId,
+        code: formatted.code,
+        detail: formatted.detail,
+      });
       await prisma.userCoupon.update({
         where: { id: userCouponId },
-        data: { giftishowTrId: trId, deliveryError: errMsg },
+        data: { giftishowTrId: trId, deliveryError: formatted.message },
       });
-      res.status(502).json({ success: false, error: errMsg, data: { trId } });
+      res.status(502).json({
+        success: false,
+        error: formatted.message,
+        errorCode: formatted.code,
+        data: { trId },
+      });
     }
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });

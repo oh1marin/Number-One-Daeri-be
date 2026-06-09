@@ -5,6 +5,7 @@ import { gifticonSpendable } from '../../lib/mileageBuckets';
 import {
   buildGifticonOrderTrId,
   defaultGiftishowMms,
+  formatGiftishowUserError,
   giftishowFindProduct,
   giftishowSend,
   giftishowVerifySendSuccess,
@@ -107,7 +108,9 @@ function formatOrder(row: {
     mileagePrice: price,
     status: asStr(row.status),
     giftishowTrId: row.giftishowTrId ? asStr(row.giftishowTrId) : null,
-    errorMessage: row.errorMessage ? asStr(row.errorMessage) : null,
+    errorMessage: row.errorMessage
+      ? asStr(formatGiftishowUserError(row.errorMessage).message)
+      : null,
     createdAt: row.createdAt.toISOString(),
     deliveredAt: row.deliveredAt ? row.deliveredAt.toISOString() : null,
   };
@@ -309,12 +312,24 @@ router.post('/exchange', async (req, res) => {
         },
       });
     } catch (sendErr) {
-      const errMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
+      const raw = sendErr instanceof Error ? sendErr.message : String(sendErr);
+      const formatted = formatGiftishowUserError(raw);
+      console.warn('[gifticon/exchange] send failed:', {
+        orderId: order.id,
+        goodsCode: product.goodsCode,
+        code: formatted.code,
+        detail: formatted.detail,
+      });
       await prisma.gifticonOrder.update({
         where: { id: order.id },
-        data: { status: 'failed', giftishowTrId: trId, errorMessage: errMsg },
+        data: { status: 'failed', giftishowTrId: trId, errorMessage: formatted.message },
       });
-      res.status(502).json({ success: false, error: errMsg, data: { orderId: order.id, trId } });
+      res.status(502).json({
+        success: false,
+        error: formatted.message,
+        errorCode: formatted.code,
+        data: { orderId: order.id, trId },
+      });
     }
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });

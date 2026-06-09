@@ -142,6 +142,90 @@ function apiError(data: GiftishowBaseResponse, fallback: string): string {
   return data.resMsg || data.message || data.resCode || data.code || fallback;
 }
 
+export type GiftishowUserError = {
+  message: string;
+  code: string | null;
+  detail: string;
+};
+
+/** 기프티쇼 API 원문 → 앱/관리자용 한글 메시지 */
+export function formatGiftishowUserError(
+  raw: string,
+  data?: Pick<GiftishowBaseResponse, 'resCode' | 'resMsg' | 'code' | 'message'>
+): GiftishowUserError {
+  const detail = String(raw ?? '').trim() || '기프티콘 발송 실패';
+  const code =
+    String(data?.resCode ?? data?.code ?? '').trim() ||
+    (detail.match(/\bE\d{4}\b/i)?.[0]?.toUpperCase() ?? null);
+  const hay = `${code ?? ''} ${detail}`.toLowerCase();
+
+  if (/e0010|biz\s*money|비즈\s*머니|balance is insufficient/.test(hay)) {
+    return {
+      message:
+        '기프티쇼 발송 잔액(비즈머니)이 부족합니다. 충전 후 다시 시도해 주세요.',
+      code: code ?? 'E0010',
+      detail,
+    };
+  }
+  if (/no products requested|invalid goods|goods.?code|상품.?코드/.test(hay)) {
+    return {
+      message:
+        '등록된 상품 코드가 올바르지 않습니다. 관리자 기프티콘 상점에서 G00000… 형식 코드를 확인해 주세요.',
+      code,
+      detail,
+    };
+  }
+  if (/trid|tr_id/.test(hay)) {
+    return {
+      message: '기프티콘 발송 요청 오류입니다. 잠시 후 다시 시도해 주세요.',
+      code,
+      detail,
+    };
+  }
+  if (/e0006|invalid authorization|authorization/.test(hay)) {
+    return {
+      message: '기프티콘 발송 인증 오류입니다. 잠시 후 다시 시도해 주세요.',
+      code: code ?? 'E0006',
+      detail,
+    };
+  }
+  if (/timeout|타임아웃|abort/.test(hay)) {
+    return {
+      message: '기프티쇼 연결 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.',
+      code,
+      detail,
+    };
+  }
+  if (/phone|수신번호|callback|발신/.test(hay)) {
+    return {
+      message: '수신 전화번호 또는 발신번호 설정을 확인해 주세요.',
+      code,
+      detail,
+    };
+  }
+  if (/already|duplicate|중복/.test(hay)) {
+    return {
+      message: '이미 처리된 발송 요청입니다. 교환 내역을 확인해 주세요.',
+      code,
+      detail,
+    };
+  }
+  if (/[가-힣]/.test(detail)) {
+    return { message: detail, code, detail };
+  }
+  return {
+    message: '기프티콘 발송에 실패했습니다. 잠시 후 다시 시도해 주세요.',
+    code,
+    detail,
+  };
+}
+
+function throwGiftishowError(data: GiftishowBaseResponse, fallback: string): never {
+  const detail = apiError(data, fallback);
+  const { message } = formatGiftishowUserError(detail, data);
+  throw new Error(message);
+}
+
 async function postForm<T extends GiftishowBaseResponse>(
   path: string,
   params: Record<string, string>
@@ -198,7 +282,7 @@ export async function giftishowListGoods(start = 1, size = 20): Promise<{
   );
 
   if (!isOk(data)) {
-    throw new Error(apiError(data, '상품 목록 조회 실패'));
+    throwGiftishowError(data, '상품 목록 조회 실패');
   }
 
   const goodsList = data.result?.goodsList;
@@ -248,7 +332,7 @@ export async function giftishowSend(params: GiftishowSendParams): Promise<Giftis
 
   const data = await postForm<GiftishowBaseResponse>('/send', body);
   if (!isOk(data)) {
-    throw new Error(apiError(data, '기프티콘 발송 실패'));
+    throwGiftishowError(data, '기프티콘 발송 실패');
   }
   return data;
 }
@@ -264,7 +348,7 @@ export async function giftishowGetCouponByTrId(trId: string): Promise<GiftishowC
   });
 
   if (!isOk(data)) {
-    throw new Error(apiError(data, '쿠폰 발송 내역 조회 실패'));
+    throwGiftishowError(data, '쿠폰 발송 내역 조회 실패');
   }
 
   return data.couponInfoList ?? [];
