@@ -27,11 +27,12 @@ function normalizePrice(raw: unknown): number {
 
 function dto(row: { giftishowGoodsCode: string | null; name: string | null; amount: number; imageUrl: string | null }) {
   const id = String(row.giftishowGoodsCode ?? '').trim();
+  const mileagePrice = Number.isFinite(row.amount) ? Math.round(row.amount) : 0;
   return {
     id,
     name: row.name ?? id,
-    mileagePrice: row.amount,
-    imageUrl: row.imageUrl,
+    mileagePrice,
+    imageUrl: row.imageUrl ?? undefined,
   };
 }
 

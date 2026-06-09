@@ -71,6 +71,15 @@ async function listProductsFromDb(): Promise<GifticonProductDto[]> {
   return products;
 }
 
+function asInt(v: unknown): number {
+  const n = typeof v === 'number' ? v : Number(String(v ?? '').replace(/[^\d.-]/g, ''));
+  return Number.isFinite(n) ? Math.round(n) : 0;
+}
+
+function asStr(v: unknown): string {
+  return String(v ?? '').trim();
+}
+
 function formatOrder(row: {
   id: string;
   goodsCode: string;
@@ -84,33 +93,44 @@ function formatOrder(row: {
   createdAt: Date;
   deliveredAt: Date | null;
 }) {
+  const price = asInt(row.price);
+  const imageUrl = row.imageUrl?.trim() || null;
   return {
-    id: row.id,
-    orderId: row.id,
-    goodsCode: row.goodsCode,
-    productId: row.goodsCode,
-    name: row.goodsName,
-    brandName: row.brandName,
-    imageUrl: row.imageUrl,
-    price: row.price,
-    status: row.status,
-    giftishowTrId: row.giftishowTrId,
-    errorMessage: row.errorMessage,
-    createdAt: row.createdAt,
-    deliveredAt: row.deliveredAt,
+    id: asStr(row.id),
+    orderId: asStr(row.id),
+    goodsCode: asStr(row.goodsCode),
+    productId: asStr(row.goodsCode),
+    name: asStr(row.goodsName),
+    brandName: asStr(row.brandName),
+    imageUrl,
+    price,
+    mileagePrice: price,
+    status: asStr(row.status),
+    giftishowTrId: row.giftishowTrId ? asStr(row.giftishowTrId) : null,
+    errorMessage: row.errorMessage ? asStr(row.errorMessage) : null,
+    createdAt: row.createdAt.toISOString(),
+    deliveredAt: row.deliveredAt ? row.deliveredAt.toISOString() : null,
   };
 }
 
 function toAppProductItem(p: GifticonProductDto) {
+  const goodsCode = asStr(p.goodsCode);
+  const price = asInt(p.price);
   const imageUrl = p.imageUrl?.trim() || null;
   return {
-    id: p.goodsCode,
-    goodsCode: p.goodsCode,
-    name: p.name,
-    price: p.price,
-    mileagePrice: p.price,
+    id: goodsCode,
+    productId: goodsCode,
+    goodsCode,
+    name: asStr(p.name) || goodsCode,
+    brandName: asStr(p.brandName),
+    category: asStr(p.category) || 'other',
+    price,
+    mileagePrice: price,
+    pointPrice: price,
     imageUrl,
-    available: p.available,
+    coverImageUrl: imageUrl,
+    thumbnailUrl: imageUrl,
+    available: Boolean(p.available),
   };
 }
 
@@ -278,12 +298,14 @@ router.post('/exchange', async (req, res) => {
         data: {
           ...formatOrder(completed),
           message: '기프티콘이 발송되었습니다.',
-          mileageBalance: (
-            await prisma.user.findUnique({
-              where: { id: userId },
-              select: { mileageBalance: true },
-            })
-          )?.mileageBalance,
+          mileageBalance: asInt(
+            (
+              await prisma.user.findUnique({
+                where: { id: userId },
+                select: { mileageBalance: true },
+              })
+            )?.mileageBalance
+          ),
         },
       });
     } catch (sendErr) {
