@@ -1,9 +1,14 @@
 /**
  * 기프티쇼 비즈 API (bizapi.giftishow.com)
- * - 0101: 상품 목록 (/goods) — GIFTISHOW_API_CODE_GOODS
+ * - 0101: 상품 목록 (/goods)
+ * - 0111: 상품 상세 (/goods/{goods_code})
+ * - 0102: 브랜드 목록 (/brands)
+ * - 0112: 브랜드 상세 (/brands/{brand_code})
  * - 0201: 쿠폰 발송 내역 조회 (/coupons, tr_id)
- * - send: MMS 기프티콘 발송 (/send) — GIFTISHOW_API_CODE_SEND
- * - cancel, resend — GIFTISHOW_API_CODE_CANCEL / RESEND
+ * - 0202: 쿠폰 취소 (/cancel)
+ * - 0203: 쿠폰 재발송 (/resend)
+ * - 0204: 쿠폰 발송 (/send, MMS)
+ * - 0301: 비즈머니 잔액 (/bizmoney)
  *
  * 공통: POST, application/x-www-form-urlencoded, dev_yn 규격서상 'N' 권장
  */
@@ -87,6 +92,18 @@ function getCallbackNo(): string {
   const n = digitsOnly(v);
   if (n.length < 8) throw new Error('GIFTISHOW_CALLBACK_NO(발신번호) 미설정');
   return n;
+}
+
+function getDefaultTemplateId(): string | undefined {
+  const v =
+    process.env.GIFTISHOW_TEMPLATE_ID?.trim() ||
+    process.env.GIFTISHOW_CARD_ID?.trim();
+  return v || undefined;
+}
+
+function getDefaultBannerId(): string | undefined {
+  const v = process.env.GIFTISHOW_BANNER_ID?.trim();
+  return v || undefined;
 }
 
 export function isGiftishowEnabled(): boolean {
@@ -183,12 +200,9 @@ export async function giftishowListGoods(start = 1, size = 20): Promise<{
   return { list, listNum: data.result?.listNum };
 }
 
-/** API send — MMS 기프티콘 발송 */
+/** API 0204 — MMS 기프티콘 발송 */
 export async function giftishowSend(params: GiftishowSendParams): Promise<GiftishowBaseResponse> {
-  const apiCode = process.env.GIFTISHOW_API_CODE_SEND?.trim();
-  if (!apiCode) {
-    throw new Error('GIFTISHOW_API_CODE_SEND 미설정 (규격서의 발송 api_code)');
-  }
+  const apiCode = process.env.GIFTISHOW_API_CODE_SEND?.trim() || '0204';
 
   const phone = digitsOnly(params.phoneNo);
   if (phone.length < 10 || phone.length > 11) {
@@ -210,9 +224,11 @@ export async function giftishowSend(params: GiftishowSendParams): Promise<Giftis
   if (params.orderNo) body.order_no = params.orderNo.trim();
   if (params.revInfoDate) body.rev_info_date = params.revInfoDate;
   if (params.revInfoTime) body.rev_info_time = params.revInfoTime;
-  if (params.templateId) body.template_id = params.templateId;
-  if (params.bannerId) body.banner_id = params.bannerId;
-  if (params.gubun) body.gubun = params.gubun;
+  const templateId = params.templateId ?? getDefaultTemplateId();
+  const bannerId = params.bannerId ?? getDefaultBannerId();
+  if (templateId) body.template_id = templateId;
+  if (bannerId) body.banner_id = bannerId;
+  body.gubun = params.gubun ?? 'N';
 
   const data = await postForm<GiftishowBaseResponse>('/send', body);
   if (!isOk(data)) {
@@ -245,12 +261,9 @@ export async function giftishowVerifySendSuccess(trId: string): Promise<Giftisho
   return ok ?? list[0] ?? null;
 }
 
-/** API cancel — 발송 취소 */
+/** API 0202 — 발송 취소 */
 export async function giftishowCancel(trId: string, userId?: string): Promise<GiftishowBaseResponse> {
-  const apiCode = process.env.GIFTISHOW_API_CODE_CANCEL?.trim();
-  if (!apiCode) {
-    throw new Error('GIFTISHOW_API_CODE_CANCEL 미설정');
-  }
+  const apiCode = process.env.GIFTISHOW_API_CODE_CANCEL?.trim() || '0202';
 
   const data = await postForm<GiftishowBaseResponse>('/cancel', {
     ...authParams(apiCode),
@@ -264,23 +277,41 @@ export async function giftishowCancel(trId: string, userId?: string): Promise<Gi
   return data;
 }
 
-/** API resend — 재발송 */
-export async function giftishowResend(trId: string, userId?: string): Promise<GiftishowBaseResponse> {
-  const apiCode = process.env.GIFTISHOW_API_CODE_RESEND?.trim();
-  if (!apiCode) {
-    throw new Error('GIFTISHOW_API_CODE_RESEND 미설정');
-  }
+/** API 0203 — 재발송 */
+export async function giftishowResend(
+  trId: string,
+  userId?: string,
+  smsFlag: 'Y' | 'N' = 'N'
+): Promise<GiftishowBaseResponse> {
+  const apiCode = process.env.GIFTISHOW_API_CODE_RESEND?.trim() || '0203';
 
   const data = await postForm<GiftishowBaseResponse>('/resend', {
     ...authParams(apiCode),
     tr_id: trId.trim(),
     user_id: (userId ?? getBizUserId()).trim(),
+    sms_flag: smsFlag,
   });
 
   if (!isOk(data)) {
     throw new Error(apiError(data, '쿠폰 재발송 실패'));
   }
   return data;
+}
+
+/** API 0301 — 비즈머니 잔액 조회 */
+export async function giftishowGetBizMoney(userId?: string): Promise<number> {
+  const apiCode = process.env.GIFTISHOW_API_CODE_BIZMONEY?.trim() || '0301';
+  const data = await postForm<GiftishowBaseResponse & { balance?: string }>('/bizmoney', {
+    ...authParams(apiCode),
+    user_id: (userId ?? getBizUserId()).trim(),
+  });
+
+  if (!isOk(data)) {
+    throw new Error(apiError(data, '비즈머니 잔액 조회 실패'));
+  }
+
+  const balance = Number(data.balance ?? 0);
+  return Number.isFinite(balance) ? balance : 0;
 }
 
 /** 쿠폰 레코드에서 기프티쇼 goods_code 추출 */
