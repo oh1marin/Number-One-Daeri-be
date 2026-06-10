@@ -104,7 +104,8 @@ router.get('/catalog/goods', async (req, res) => {
     const q = String(req.query.q ?? '').trim();
     const brandCode = String(req.query.brandCode ?? req.query.brand ?? '').trim();
 
-    if (q && q.length < 2) {
+    const isGoodsCode = /^G\d{5,}$/i.test(q);
+    if (q && q.length < 2 && !isGoodsCode) {
       jsonError(res, 400, '검색어는 2글자 이상 입력해 주세요.', { code: 'SEARCH_TOO_SHORT' });
       return;
     }
@@ -124,10 +125,15 @@ router.get('/catalog/goods', async (req, res) => {
         total: result.total,
         hasMore: result.hasMore,
         mode: result.mode,
+        fromCache: result.fromCache,
         hint:
-          result.mode === 'search'
-            ? '검색 결과는 최대 1,250개 상품 범위에서 조회됩니다.'
-            : undefined,
+          result.mode === 'code'
+            ? '상품 코드로 즉시 조회했습니다.'
+            : result.mode === 'search'
+              ? result.fromCache
+                ? `전체 카탈로그에서 검색 (캐시, ${result.total ?? 0}건)`
+                : '목록을 준비했습니다. 같은 세션에서 다시 검색하면 더 빠릅니다.'
+              : undefined,
       },
     });
   } catch (e) {

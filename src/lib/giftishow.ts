@@ -300,6 +300,11 @@ export async function giftishowListBrands(start = 1, size = 100): Promise<{
   list: GiftishowBrandDto[];
   listNum?: number;
 }> {
+  const now = Date.now();
+  if (start === 1 && size >= 100 && brandsCache && now - brandsCache.builtAt < BRANDS_CACHE_TTL_MS) {
+    return { list: brandsCache.list, listNum: brandsCache.listNum };
+  }
+
   const apiCode = process.env.GIFTISHOW_API_CODE_BRANDS?.trim() || '0102';
   const data = await postForm<
     GiftishowBaseResponse & { result?: { brandList?: unknown[]; listNum?: number } }
@@ -336,6 +341,10 @@ export async function giftishowListBrands(start = 1, size = 100): Promise<{
     });
   }
 
+  if (start === 1 && size >= 100) {
+    brandsCache = { list, listNum: data.result?.listNum, builtAt: Date.now() };
+  }
+
   return { list, listNum: data.result?.listNum };
 }
 
@@ -368,10 +377,15 @@ function matchesCatalogFilter(
   if (brandCode && item.brandCode.toUpperCase() !== brandCode) return false;
   if (!q) return true;
   const hay = `${item.goodsCode} ${item.name} ${item.brandName} ${item.category}`.toLowerCase();
-  return hay.includes(q);
+  const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
+  return tokens.every((t) => hay.includes(t));
 }
 
-/** 관리자 카탈로그: 필터 없으면 기프티쇼 페이지 그대로, 검색/브랜드 시 제한 스캔 */
+function isGoodsCodeQuery(q: string): boolean {
+  return /^G\d{5,}$/i.test(q.trim());
+}
+
+/** 관리자 카탈로그: 무필터=1회 API, 검색/브랜드=메모리 인덱스(병렬 빌드·15분 캐시) */
 export async function giftishowCatalogGoods(opts: {
   page?: number;
   size?: number;
@@ -381,22 +395,27 @@ export async function giftishowCatalogGoods(opts: {
   items: GifticonProductDto[];
   total?: number;
   hasMore: boolean;
-  mode: 'page' | 'search';
+  mode: 'page' | 'search' | 'code';
+  fromCache?: boolean;
 }> {
   const page = Math.max(1, opts.page ?? 1);
   const size = Math.min(CATALOG_MAX_PAGE_SIZE, Math.max(1, opts.size ?? 20));
-  const q = String(opts.q ?? '').trim().toLowerCase();
+  const rawQ = String(opts.q ?? '').trim();
+  const q = rawQ.toLowerCase();
   const brandCode = String(opts.brandCode ?? '').trim().toUpperCase();
   const hasFilter = q.length >= CATALOG_SEARCH_MIN_LEN || !!brandCode;
 
+  if (isGoodsCodeQuery(rawQ)) {
+    const product = await giftishowGetGoodsDetail(rawQ);
+    if (product && matchesCatalogFilter(product, '', brandCode)) {
+      return { items: [product], total: 1, hasMore: false, mode: 'code', fromCache: false };
+    }
+    return { items: [], total: 0, hasMore: false, mode: 'code', fromCache: false };
+  }
+
   if (!hasFilter) {
     const { list, listNum } = await giftishowListGoods(page, size);
-    const items: GifticonProductDto[] = [];
-    for (const item of list) {
-      if (typeof item !== 'object' || item == null) continue;
-      const mapped = mapGiftishowGoodsToProduct(item as Record<string, unknown>);
-      if (mapped) items.push(mapped);
-    }
+    const items = mapListToProducts(list);
     return {
       items,
       total: listNum,
@@ -405,18 +424,8 @@ export async function giftishowCatalogGoods(opts: {
     };
   }
 
-  const pool: GifticonProductDto[] = [];
-  for (let p = 1; p <= CATALOG_SEARCH_MAX_SCAN_PAGES; p++) {
-    const { list } = await giftishowListGoods(p, CATALOG_MAX_PAGE_SIZE);
-    if (!list.length) break;
-    for (const item of list) {
-      if (typeof item !== 'object' || item == null) continue;
-      const mapped = mapGiftishowGoodsToProduct(item as Record<string, unknown>);
-      if (!mapped) continue;
-      if (matchesCatalogFilter(mapped, q, brandCode)) pool.push(mapped);
-    }
-    if (list.length < CATALOG_MAX_PAGE_SIZE) break;
-  }
+  const { index, fromCache } = await getCatalogIndex();
+  const pool = index.items.filter((item) => matchesCatalogFilter(item, q, brandCode));
 
   const skip = (page - 1) * size;
   const items = pool.slice(skip, skip + size);
@@ -425,6 +434,7 @@ export async function giftishowCatalogGoods(opts: {
     total: pool.length,
     hasMore: skip + size < pool.length,
     mode: 'search',
+    fromCache,
   };
 }
 
@@ -588,7 +598,82 @@ export type GiftishowBrandDto = {
 
 const CATALOG_MAX_PAGE_SIZE = 50;
 const CATALOG_SEARCH_MIN_LEN = 2;
-const CATALOG_SEARCH_MAX_SCAN_PAGES = 25;
+const CATALOG_CACHE_TTL_MS = 15 * 60 * 1000;
+const CATALOG_FETCH_CONCURRENCY = 8;
+const BRANDS_CACHE_TTL_MS = 30 * 60 * 1000;
+
+type CatalogIndex = {
+  items: GifticonProductDto[];
+  listNum?: number;
+  builtAt: number;
+};
+
+let catalogIndex: CatalogIndex | null = null;
+let catalogIndexPromise: Promise<CatalogIndex> | null = null;
+let brandsCache: { list: GiftishowBrandDto[]; listNum?: number; builtAt: number } | null = null;
+
+function mapListToProducts(list: unknown[]): GifticonProductDto[] {
+  const items: GifticonProductDto[] = [];
+  for (const item of list) {
+    if (typeof item !== 'object' || item == null) continue;
+    const mapped = mapGiftishowGoodsToProduct(item as Record<string, unknown>);
+    if (mapped) items.push(mapped);
+  }
+  return items;
+}
+
+async function buildCatalogIndex(): Promise<CatalogIndex> {
+  const PAGE_SIZE = CATALOG_MAX_PAGE_SIZE;
+  const first = await giftishowListGoods(1, PAGE_SIZE);
+  const items = mapListToProducts(first.list);
+  const listNum = first.listNum;
+  const totalPages = listNum
+    ? Math.ceil(listNum / PAGE_SIZE)
+    : first.list.length < PAGE_SIZE
+      ? 1
+      : 50;
+
+  for (let batchStart = 2; batchStart <= totalPages; batchStart += CATALOG_FETCH_CONCURRENCY) {
+    const pageNums: number[] = [];
+    for (let p = batchStart; p < batchStart + CATALOG_FETCH_CONCURRENCY && p <= totalPages; p++) {
+      pageNums.push(p);
+    }
+    const pages = await Promise.all(pageNums.map((p) => giftishowListGoods(p, PAGE_SIZE)));
+    for (const { list } of pages) {
+      if (!list.length) break;
+      items.push(...mapListToProducts(list));
+    }
+  }
+
+  return { items, listNum, builtAt: Date.now() };
+}
+
+async function getCatalogIndex(): Promise<{ index: CatalogIndex; fromCache: boolean }> {
+  const now = Date.now();
+  if (catalogIndex && now - catalogIndex.builtAt < CATALOG_CACHE_TTL_MS) {
+    return { index: catalogIndex, fromCache: true };
+  }
+  if (!catalogIndexPromise) {
+    catalogIndexPromise = buildCatalogIndex()
+      .then((idx) => {
+        catalogIndex = idx;
+        catalogIndexPromise = null;
+        return idx;
+      })
+      .catch((err) => {
+        catalogIndexPromise = null;
+        throw err;
+      });
+  }
+  const index = await catalogIndexPromise!;
+  return { index, fromCache: false };
+}
+
+/** 관리자 카탈로그 캐시 무효화 (선택) */
+export function invalidateGiftishowCatalogCache(): void {
+  catalogIndex = null;
+  brandsCache = null;
+}
 
 function parsePrice(raw: Record<string, unknown>): number {
   const n = Number(raw.realPrice ?? raw.salePrice ?? raw.discountPrice ?? raw.sellPriceAmt ?? 0);
