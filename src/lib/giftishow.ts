@@ -295,6 +295,139 @@ export async function giftishowListGoods(start = 1, size = 20): Promise<{
   return { list, listNum: data.result?.listNum };
 }
 
+/** API 0102 — 브랜드 목록 */
+export async function giftishowListBrands(start = 1, size = 100): Promise<{
+  list: GiftishowBrandDto[];
+  listNum?: number;
+}> {
+  const apiCode = process.env.GIFTISHOW_API_CODE_BRANDS?.trim() || '0102';
+  const data = await postForm<
+    GiftishowBaseResponse & { result?: { brandList?: unknown[]; listNum?: number } }
+  >('/brands', {
+    ...authParams(apiCode),
+    start: String(start),
+    size: String(size),
+  });
+
+  if (!isOk(data)) {
+    throwGiftishowError(data, '브랜드 목록 조회 실패');
+  }
+
+  const brandList = data.result?.brandList;
+  const raw = Array.isArray(brandList)
+    ? brandList
+    : brandList && typeof brandList === 'object'
+      ? Object.values(brandList)
+      : [];
+
+  const list: GiftishowBrandDto[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    const brandCode = String(row.brandCode ?? '').trim();
+    const brandName = String(row.brandName ?? row.brandNm ?? '').trim();
+    if (!brandCode || !brandName) continue;
+    list.push({
+      brandCode,
+      brandName,
+      categoryName: String(row.category1Name ?? row.category2Name ?? '').trim(),
+      imageUrl:
+        String(row.brandIConImg ?? row.mmsThumImg ?? '').trim() || null,
+    });
+  }
+
+  return { list, listNum: data.result?.listNum };
+}
+
+/** API 0111 — 상품 상세 */
+export async function giftishowGetGoodsDetail(goodsCode: string): Promise<GifticonProductDto | null> {
+  const code = goodsCode.trim().toUpperCase();
+  if (!code) return null;
+
+  const apiCode = process.env.GIFTISHOW_API_CODE_GOODS_DETAIL?.trim() || '0111';
+  const data = await postForm<
+    GiftishowBaseResponse & { result?: { goodsDetail?: Record<string, unknown> } }
+  >(`/goods/${code}`, {
+    ...authParams(apiCode),
+  });
+
+  if (!isOk(data)) {
+    throwGiftishowError(data, '상품 상세 조회 실패');
+  }
+
+  const detail = data.result?.goodsDetail;
+  if (!detail || typeof detail !== 'object') return null;
+  return mapGiftishowGoodsToProduct({ ...detail, goodsCode: detail.goodsCode ?? code });
+}
+
+function matchesCatalogFilter(
+  item: GifticonProductDto,
+  q: string,
+  brandCode: string
+): boolean {
+  if (brandCode && item.brandCode.toUpperCase() !== brandCode) return false;
+  if (!q) return true;
+  const hay = `${item.goodsCode} ${item.name} ${item.brandName} ${item.category}`.toLowerCase();
+  return hay.includes(q);
+}
+
+/** 관리자 카탈로그: 필터 없으면 기프티쇼 페이지 그대로, 검색/브랜드 시 제한 스캔 */
+export async function giftishowCatalogGoods(opts: {
+  page?: number;
+  size?: number;
+  q?: string;
+  brandCode?: string;
+}): Promise<{
+  items: GifticonProductDto[];
+  total?: number;
+  hasMore: boolean;
+  mode: 'page' | 'search';
+}> {
+  const page = Math.max(1, opts.page ?? 1);
+  const size = Math.min(CATALOG_MAX_PAGE_SIZE, Math.max(1, opts.size ?? 20));
+  const q = String(opts.q ?? '').trim().toLowerCase();
+  const brandCode = String(opts.brandCode ?? '').trim().toUpperCase();
+  const hasFilter = q.length >= CATALOG_SEARCH_MIN_LEN || !!brandCode;
+
+  if (!hasFilter) {
+    const { list, listNum } = await giftishowListGoods(page, size);
+    const items: GifticonProductDto[] = [];
+    for (const item of list) {
+      if (typeof item !== 'object' || item == null) continue;
+      const mapped = mapGiftishowGoodsToProduct(item as Record<string, unknown>);
+      if (mapped) items.push(mapped);
+    }
+    return {
+      items,
+      total: listNum,
+      hasMore: listNum ? page * size < listNum : items.length >= size,
+      mode: 'page',
+    };
+  }
+
+  const pool: GifticonProductDto[] = [];
+  for (let p = 1; p <= CATALOG_SEARCH_MAX_SCAN_PAGES; p++) {
+    const { list } = await giftishowListGoods(p, CATALOG_MAX_PAGE_SIZE);
+    if (!list.length) break;
+    for (const item of list) {
+      if (typeof item !== 'object' || item == null) continue;
+      const mapped = mapGiftishowGoodsToProduct(item as Record<string, unknown>);
+      if (!mapped) continue;
+      if (matchesCatalogFilter(mapped, q, brandCode)) pool.push(mapped);
+    }
+    if (list.length < CATALOG_MAX_PAGE_SIZE) break;
+  }
+
+  const skip = (page - 1) * size;
+  const items = pool.slice(skip, skip + size);
+  return {
+    items,
+    total: pool.length,
+    hasMore: skip + size < pool.length,
+    mode: 'search',
+  };
+}
+
 /** API 0204 — MMS 기프티콘 발송 */
 export async function giftishowSend(params: GiftishowSendParams): Promise<GiftishowBaseResponse> {
   const apiCode = process.env.GIFTISHOW_API_CODE_SEND?.trim() || '0204';
@@ -439,11 +572,23 @@ export type GifticonProductDto = {
   goodsCode: string;
   name: string;
   brandName: string;
+  brandCode: string;
   price: number;
   imageUrl: string | null;
   category: string;
   available: boolean;
 };
+
+export type GiftishowBrandDto = {
+  brandCode: string;
+  brandName: string;
+  categoryName: string;
+  imageUrl: string | null;
+};
+
+const CATALOG_MAX_PAGE_SIZE = 50;
+const CATALOG_SEARCH_MIN_LEN = 2;
+const CATALOG_SEARCH_MAX_SCAN_PAGES = 25;
 
 function parsePrice(raw: Record<string, unknown>): number {
   const n = Number(raw.realPrice ?? raw.salePrice ?? raw.discountPrice ?? raw.sellPriceAmt ?? 0);
@@ -461,6 +606,7 @@ export function mapGiftishowGoodsToProduct(raw: Record<string, unknown>): Giftic
     goodsCode,
     name: String(raw.goodsName ?? raw.goodsNm ?? goodsCode),
     brandName: String(raw.brandName ?? raw.brandNm ?? ''),
+    brandCode: String(raw.brandCode ?? '').trim().toUpperCase(),
     price,
     imageUrl:
       String(raw.goodsImgS ?? raw.mmsGoodsImg ?? raw.goodsImgB ?? '').trim() || null,

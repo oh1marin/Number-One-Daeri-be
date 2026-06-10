@@ -1,7 +1,42 @@
 import { Router } from 'express';
 import { prisma } from '../../lib/prisma';
+import { jsonError } from '../../lib/jsonError';
+import {
+  giftishowCatalogGoods,
+  giftishowGetGoodsDetail,
+  giftishowListBrands,
+  isGiftishowEnabled,
+  type GifticonProductDto,
+} from '../../lib/giftishow';
 
 const router = Router();
+
+function catalogItemDto(row: GifticonProductDto, alreadyRegistered: boolean) {
+  return {
+    id: row.goodsCode,
+    goodsCode: row.goodsCode,
+    name: row.name,
+    brandName: row.brandName,
+    brandCode: row.brandCode,
+    price: row.price,
+    mileagePrice: row.price,
+    imageUrl: row.imageUrl ?? undefined,
+    category: row.category,
+    available: row.available,
+    alreadyRegistered,
+  };
+}
+
+async function registeredGoodsCodes(codes: string[]): Promise<Set<string>> {
+  if (!codes.length) return new Set();
+  const rows = await prisma.coupon.findMany({
+    where: { giftishowGoodsCode: { in: codes } },
+    select: { giftishowGoodsCode: true },
+  });
+  return new Set(
+    rows.map((r) => String(r.giftishowGoodsCode ?? '').trim().toUpperCase()).filter(Boolean)
+  );
+}
 
 function normalizeGoodsCode(raw: unknown): string {
   return String(raw ?? '')
@@ -35,6 +70,168 @@ function dto(row: { giftishowGoodsCode: string | null; name: string | null; amou
     imageUrl: row.imageUrl ?? undefined,
   };
 }
+
+// GET /admin/gifticon/catalog/brands — 기프티쇼 브랜드 목록
+router.get('/catalog/brands', async (req, res) => {
+  try {
+    if (!isGiftishowEnabled()) {
+      jsonError(res, 503, '기프티쇼 API가 설정되지 않았습니다.', { code: 'GIFTISHOW_NOT_CONFIGURED' });
+      return;
+    }
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const size = Math.min(200, Math.max(1, Number(req.query.size) || 200));
+    const { list, listNum } = await giftishowListBrands(page, size);
+    res.json({
+      success: true,
+      data: { items: list, total: listNum ?? list.length, page, size },
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    jsonError(res, 502, msg || '브랜드 목록 조회 실패');
+  }
+});
+
+// GET /admin/gifticon/catalog/goods — 기프티쇼 상품 (페이지·검색·브랜드 필터)
+router.get('/catalog/goods', async (req, res) => {
+  try {
+    if (!isGiftishowEnabled()) {
+      jsonError(res, 503, '기프티쇼 API가 설정되지 않았습니다.', { code: 'GIFTISHOW_NOT_CONFIGURED' });
+      return;
+    }
+
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const size = Math.min(50, Math.max(1, Number(req.query.size) || 20));
+    const q = String(req.query.q ?? '').trim();
+    const brandCode = String(req.query.brandCode ?? req.query.brand ?? '').trim();
+
+    if (q && q.length < 2) {
+      jsonError(res, 400, '검색어는 2글자 이상 입력해 주세요.', { code: 'SEARCH_TOO_SHORT' });
+      return;
+    }
+
+    const result = await giftishowCatalogGoods({ page, size, q, brandCode });
+    const codes = result.items.map((i) => i.goodsCode);
+    const registered = await registeredGoodsCodes(codes);
+
+    res.json({
+      success: true,
+      data: {
+        items: result.items.map((i) =>
+          catalogItemDto(i, registered.has(i.goodsCode.toUpperCase()))
+        ),
+        page,
+        size,
+        total: result.total,
+        hasMore: result.hasMore,
+        mode: result.mode,
+        hint:
+          result.mode === 'search'
+            ? '검색 결과는 최대 1,250개 상품 범위에서 조회됩니다.'
+            : undefined,
+      },
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    jsonError(res, 502, msg || '상품 목록 조회 실패');
+  }
+});
+
+// GET /admin/gifticon/catalog/goods/:goodsCode — 기프티쇼 상품 상세
+router.get('/catalog/goods/:goodsCode', async (req, res) => {
+  try {
+    if (!isGiftishowEnabled()) {
+      jsonError(res, 503, '기프티쇼 API가 설정되지 않았습니다.', { code: 'GIFTISHOW_NOT_CONFIGURED' });
+      return;
+    }
+    const goodsCode = normalizeGoodsCode(req.params.goodsCode);
+    if (!goodsCode) {
+      jsonError(res, 400, 'goodsCode 필수');
+      return;
+    }
+
+    const product = await giftishowGetGoodsDetail(goodsCode);
+    if (!product) {
+      jsonError(res, 404, '기프티쇼에서 상품을 찾을 수 없습니다.');
+      return;
+    }
+
+    const registered = await registeredGoodsCodes([goodsCode]);
+    res.json({
+      success: true,
+      data: catalogItemDto(product, registered.has(goodsCode)),
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    jsonError(res, 502, msg || '상품 상세 조회 실패');
+  }
+});
+
+// POST /admin/gifticon/products/import — 기프티쇼 상품코드로 자동 등록
+router.post('/products/import', async (req, res) => {
+  try {
+    if (!isGiftishowEnabled()) {
+      jsonError(res, 503, '기프티쇼 API가 설정되지 않았습니다.', { code: 'GIFTISHOW_NOT_CONFIGURED' });
+      return;
+    }
+
+    const goodsCode = normalizeGoodsCode(req.body?.id ?? req.body?.goodsCode);
+    if (!goodsCode) {
+      jsonError(res, 400, 'goodsCode 필수');
+      return;
+    }
+
+    const product = await giftishowGetGoodsDetail(goodsCode);
+    if (!product) {
+      jsonError(res, 404, '기프티쇼에서 상품을 찾을 수 없습니다.');
+      return;
+    }
+    if (!product.available) {
+      jsonError(res, 400, '판매 중이 아닌 상품은 등록할 수 없습니다.');
+      return;
+    }
+
+    const mileageOverride = normalizePrice(
+      req.body?.mileagePrice ?? req.body?.price ?? req.body?.amount
+    );
+    const mileagePrice = mileageOverride > 0 ? mileageOverride : product.price;
+    if (!mileagePrice) {
+      jsonError(res, 400, '마일리지 가격을 확인할 수 없습니다.');
+      return;
+    }
+
+    const name =
+      normalizeName(req.body?.name) ??
+      (product.brandName ? `${product.brandName} ${product.name}` : product.name);
+    const imageUrl =
+      normalizeImageUrl(req.body?.imageUrl) ?? normalizeImageUrl(product.imageUrl);
+
+    const code = `GIFTICON_${goodsCode}`;
+    const upserted = await prisma.coupon.upsert({
+      where: { code },
+      create: {
+        code,
+        name: name ?? goodsCode,
+        type: 'giftcard',
+        imageUrl,
+        amount: mileagePrice,
+        giftishowGoodsCode: goodsCode,
+        validUntil: null,
+      },
+      update: {
+        name: name ?? undefined,
+        imageUrl,
+        amount: mileagePrice,
+        giftishowGoodsCode: goodsCode,
+      },
+      select: { giftishowGoodsCode: true, name: true, amount: true, imageUrl: true },
+    });
+
+    res.status(201).json({ success: true, data: dto(upserted) });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    jsonError(res, 502, msg || '상품 등록 실패');
+  }
+});
 
 // GET /admin/gifticon/products — 관리자가 앱에 보여줄 기프티콘 상품(쿠폰 카탈로그) 관리용 목록
 router.get('/products', async (req, res) => {

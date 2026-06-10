@@ -64,6 +64,7 @@ async function listProductsFromDb(): Promise<GifticonProductDto[]> {
       goodsCode,
       name: c.name ?? goodsCode,
       brandName: '',
+      brandCode: '',
       price: c.amount,
       imageUrl: c.imageUrl,
       category: inferCouponType(c.code, c.name, c.type),
