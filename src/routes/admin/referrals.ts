@@ -47,7 +47,7 @@ router.get('/tier-bonuses', async (_req, res) => {
         id: b.id,
         tier: b.tier,
         rewardType: b.rewardType,
-        name: b.rewardType === 'starbucks_2' ? '스타벅스 쿠폰 2장' : '교촌치킨 세트',
+        name: b.rewardType === 'starbucks_2' ? '스타벅스 쿠폰 2장' : '교촌양념 (22,000원)',
         referrer: b.referrer,
         earnedAt: b.createdAt,
       })),

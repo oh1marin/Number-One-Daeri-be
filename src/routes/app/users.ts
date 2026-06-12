@@ -108,42 +108,18 @@ router.delete("/me", async (req, res) => {
         data: { userId: null, phone: null, customerName: "탈퇴회원" },
       });
 
-      // 추천/피추천 관계는 FK 제약 때문에 먼저 정리
-      await tx.userReferral.deleteMany({
-        where: { OR: [{ referrerId: userId }, { referredId: userId }] },
-      });
-      await tx.referrerTierBonus.deleteMany({ where: { referrerId: userId } });
-
-      // 세션/토큰/로그
+      // 세션/토큰/로그 — 동일 전화번호 재가입 시 같은 계정으로 복구
       await tx.userPushToken.deleteMany({ where: { userId } });
       await tx.userRefreshToken.deleteMany({ where: { userId } });
-      await tx.userLoginLog.deleteMany({ where: { userId } });
 
-      // 유저 소유 데이터
-      await tx.mileageHistory.deleteMany({ where: { userId } });
-      await tx.withdrawal.deleteMany({ where: { userId } });
-      await tx.userInquiry.deleteMany({ where: { userId } });
-      await tx.complaint.deleteMany({ where: { userId } });
-      await tx.userCoupon.deleteMany({ where: { userId } });
-      await tx.cashReceipt.deleteMany({ where: { userId } });
-      await tx.payment.deleteMany({ where: { userId } });
-      await tx.userCard.deleteMany({ where: { userId } });
-
-      // phone OTP 정리 (phone 기반)
       if (phoneDigits) {
         await tx.phoneOtp.deleteMany({ where: { phone: phoneDigits } });
-
-        // 앱 가입 시 생성했던 Customer(관리대장)도 best-effort 제거
-        await tx.customer.deleteMany({
-          where: {
-            category: "앱회원",
-            OR: [{ phone: phoneDigits }, { mobile: phoneDigits }],
-          },
-        });
       }
 
-      // 마지막으로 유저 삭제(하드 삭제)
-      await tx.user.delete({ where: { id: userId } });
+      await tx.user.update({
+        where: { id: userId },
+        data: { deletedAt: new Date() },
+      });
     });
 
     res.json({

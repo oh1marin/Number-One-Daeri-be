@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma';
 import { jsonError } from '../lib/jsonError';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt';
 import { generateOtpCode, getOtpExpireMinutes, sendSmsOtp } from '../lib/sms';
+import { findUserByPhone, normalizePhone as normalizeUserPhone } from '../lib/phoneUser';
 
 const router = Router();
 
@@ -14,7 +15,7 @@ const router = Router();
 const DAILY_PHONE_SEND_LIMIT = 10;
 
 function normalizePhone(phone: string): string {
-  return String(phone).replace(/\D/g, '').trim();
+  return normalizeUserPhone(phone);
 }
 
 function validatePhone(phone: string): boolean {
@@ -92,11 +93,16 @@ router.post('/phone/verify', async (req, res) => {
 
     await prisma.phoneOtp.delete({ where: { id: otp.id } });
 
-    let user = await prisma.user.findFirst({
-      where: { phone: normalized, deletedAt: null },
-    });
+    let user = await findUserByPhone(normalized);
 
     const INITIAL_MILEAGE = 10000;
+
+    if (user?.deletedAt) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { deletedAt: null },
+      });
+    }
 
     if (!user) {
       user = await prisma.$transaction(async (tx) => {
@@ -196,7 +202,17 @@ router.post('/register', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(String(password), 10);
     const INITIAL_MILEAGE = 10000; // 앱 다운로드 시 10,000원 적립
-    const trimmedPhone = phone ? String(phone).replace(/\D/g, '').trim() : null;
+    const trimmedPhone = phone ? normalizeUserPhone(String(phone)) : null;
+    if (trimmedPhone) {
+      const phoneTaken = await findUserByPhone(trimmedPhone);
+      if (phoneTaken) {
+        res.status(409).json({
+          success: false,
+          error: '이미 등록된 전화번호입니다. 전화번호 로그인을 이용해주세요.',
+        });
+        return;
+      }
+    }
     const user = await prisma.$transaction(async (tx) => {
       const u = await tx.user.create({
         data: {

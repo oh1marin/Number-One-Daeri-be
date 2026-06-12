@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import { prisma } from '../../lib/prisma';
+import { findUserByPhone, normalizePhone } from '../../lib/phoneUser';
+import { issueReferrerTierTickets } from '../../lib/referralTierRewards';
 
 const router = Router();
 
-const REFERRER_REWARD = 2000; // B가 A 코드로 가입 시 A에게 2,000원
-// 친구(B)는 10,000원 받지 않음 — 10,000원은 기본 가입 보너스(추천 무관)
+const REFERRER_REWARD = 2000; // B가 A 전화번호로 추천 등록 시 A에게 2,000원
+// 친구(B) 추가 마일리지 없음 — 10,000P는 가입 보너스(추천 무관)
 
 // POST /referrals/register
 router.post('/register', async (req, res) => {
@@ -17,13 +19,10 @@ router.post('/register', async (req, res) => {
       return;
     }
 
-    const phone = String(referrerPhone).trim().replace(/\s|-/g, '');
-    const users = await prisma.user.findMany({ where: { phone: { not: null } } });
-    const referrer = users.find(
-      (u) => u.phone && u.phone.replace(/\s|-/g, '') === phone
-    );
+    const phone = normalizePhone(referrerPhone);
+    const referrer = await findUserByPhone(phone);
 
-    if (!referrer) {
+    if (!referrer || referrer.deletedAt) {
       res.status(404).json({ success: false, error: '추천인을 찾을 수 없습니다.' });
       return;
     }
@@ -53,7 +52,7 @@ router.post('/register', async (req, res) => {
           referredReward: 0,
         },
       });
-      await tx.user.update({
+      const refAfter = await tx.user.update({
         where: { id: referrer.id },
         data: { mileageBalance: { increment: REFERRER_REWARD } },
       });
@@ -62,29 +61,15 @@ router.post('/register', async (req, res) => {
           userId: referrer.id,
           type: 'earn',
           amount: REFERRER_REWARD,
-          balance: referrer.mileageBalance + REFERRER_REWARD,
+          balance: refAfter.mileageBalance,
           description: '추천 보상',
         },
       });
 
-      // 2명/5명 추천 시 쿠폰 지급 (마일리지 아님)
-      const newCount = (await tx.userReferral.count({ where: { referrerId: referrer.id } }));
-      const tierRewards: [number, string][] = [
-        [2, 'starbucks_2'],   // 스타벅스 쿠폰 2장
-        [5, 'kyochon_set'],   // 교촌치킨 세트
-      ];
-      for (const [tier, rewardType] of tierRewards) {
-        if (newCount >= tier) {
-          const existing = await tx.referrerTierBonus.findUnique({
-            where: { referrerId_tier: { referrerId: referrer.id, tier } },
-          });
-          if (!existing) {
-            await tx.referrerTierBonus.create({
-              data: { referrerId: referrer.id, tier, rewardType },
-            });
-          }
-        }
-      }
+      const newCount = await tx.userReferral.count({
+        where: { referrerId: referrer.id },
+      });
+      await issueReferrerTierTickets(tx, referrer.id, newCount);
     });
 
     res.json({
@@ -113,7 +98,13 @@ router.get('/my', async (req, res) => {
     const referrerTotal = referredList.reduce((s, r) => s + r.referrerReward, 0);
     const totalReward = referrerTotal;
 
-    // 2명/5명 추천 보너스 쿠폰 목록
+    if (referredCount > 0) {
+      await prisma.$transaction(async (tx) => {
+        await issueReferrerTierTickets(tx, userId, referredCount);
+      });
+    }
+
+    // 2명/5명 추천 보너스 — 쿠폰함 티켓
     const tierBonuses = await prisma.referrerTierBonus.findMany({
       where: { referrerId: userId },
       orderBy: { tier: 'asc' },
@@ -121,8 +112,13 @@ router.get('/my', async (req, res) => {
     const tierCoupons = tierBonuses.map((b) => ({
       tier: b.tier,
       rewardType: b.rewardType,
-      name: b.rewardType === 'starbucks_2' ? '스타벅스 쿠폰 2장' : '교촌치킨 세트',
+      name:
+        b.rewardType === 'starbucks_2'
+          ? '메가MGC커피 아메리카노 쿠폰 2장'
+          : '교촌양념 (22,000원)',
+      status: b.status,
       earnedAt: b.createdAt,
+      couponWallet: b.status === 'claimed',
     }));
 
     res.json({
