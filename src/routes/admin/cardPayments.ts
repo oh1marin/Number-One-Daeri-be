@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../../lib/prisma';
 import { cancelPayment, isPortOneConfigured } from '../../lib/portone';
+import { cancelTossPayment, isTossConfigured } from '../../lib/tosspayments';
 
 const router = Router();
 
@@ -81,11 +82,75 @@ router.get('/today', async (_req, res) => {
   }
 });
 
-// POST /admin/card-payments/cancel — PortOne 결제 취소(환불)
-// Body: { transactionId: string, amount?: number } — amount 미입력 시 전액 취소
-// 용도: 100원 인증 결제 수동 환불, 기타 결제 취소
+// POST /admin/card-payments/cancel — PG 결제 취소(환불)
+// Body: { transactionId: string, amount?: number, provider?: 'portone' | 'tosspayments', paymentId?: string, cancelReason?: string }
 router.post('/cancel', async (req, res) => {
   try {
+    const { transactionId, amount, provider, paymentId, cancelReason } = req.body;
+
+    let pgTid = transactionId != null ? String(transactionId).trim() : '';
+    let pgProvider = provider != null ? String(provider).trim() : '';
+
+    if (paymentId) {
+      const row = await prisma.payment.findUnique({ where: { id: String(paymentId) } });
+      if (row?.pgTid) pgTid = row.pgTid;
+      if (row?.pgProvider) pgProvider = row.pgProvider;
+    }
+
+    if (!pgTid) {
+      return res.status(400).json({
+        success: false,
+        error: 'transactionId 또는 paymentId 필수',
+      });
+    }
+
+    if (pgProvider === 'tosspayments') {
+      if (!isTossConfigured()) {
+        return res.status(503).json({
+          success: false,
+          error: '토스페이먼츠 API가 설정되지 않았습니다. (TOSS_SECRET_KEY)',
+        });
+      }
+
+      const reason =
+        cancelReason != null && String(cancelReason).trim()
+          ? String(cancelReason).trim()
+          : '관리자 취소';
+
+      const result = await cancelTossPayment(
+        pgTid,
+        reason,
+        amount != null ? Number(amount) : undefined
+      );
+
+      if (!result.success) {
+        return res.status(400).json({
+          success: false,
+          error: result.error || '결제 취소 실패',
+        });
+      }
+
+      if (paymentId) {
+        const toss = result.payment;
+        const fullyCanceled =
+          toss?.status === 'CANCELED' ||
+          (toss?.balanceAmount != null && toss.balanceAmount === 0);
+        if (fullyCanceled) {
+          await prisma.payment.update({
+            where: { id: String(paymentId) },
+            data: { status: 'failed' },
+          });
+        }
+      }
+
+      return res.json({
+        success: true,
+        data: { message: '결제가 취소되었습니다.', provider: 'tosspayments' },
+      });
+    }
+
+    if (!pgProvider) pgProvider = 'portone';
+
     if (!isPortOneConfigured()) {
       return res.status(503).json({
         success: false,
@@ -93,16 +158,8 @@ router.post('/cancel', async (req, res) => {
       });
     }
 
-    const { transactionId, amount } = req.body;
-    if (!transactionId || typeof transactionId !== 'string') {
-      return res.status(400).json({
-        success: false,
-        error: 'transactionId 필수',
-      });
-    }
-
     const result = await cancelPayment(
-      transactionId.trim(),
+      pgTid,
       amount != null ? Number(amount) : undefined
     );
 
@@ -115,7 +172,7 @@ router.post('/cancel', async (req, res) => {
 
     res.json({
       success: true,
-      data: { message: '결제가 취소되었습니다.' },
+      data: { message: '결제가 취소되었습니다.', provider: 'portone' },
     });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });

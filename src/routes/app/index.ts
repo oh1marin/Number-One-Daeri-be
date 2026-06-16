@@ -22,6 +22,8 @@ import receipts from './receipts';
 import storage from './storage';
 import pushTokens from './pushTokens';
 import gifticon from './gifticon';
+import tossPayments from './tossPayments';
+import tossWebhook from '../webhooks/toss';
 import { userAuthMiddleware } from '../../middleware/userAuth';
 
 const router = Router();
@@ -55,6 +57,9 @@ router.use('/contact', contact);
 // 자주하는질문 — 공개
 router.use('/faqs', faqs);
 
+// 토스페이먼츠 웹훅 — 공개 (인증 없음)
+router.use('/webhooks/toss', tossWebhook);
+
 // 인증 필요 (앱 사용자)
 router.use(userAuthMiddleware);
 router.use('/users', users);
@@ -64,6 +69,7 @@ router.use('/mileage', mileage);
 router.use('/withdrawals', withdrawals);
 router.use('/cards', cards);
 router.use('/payments', payments);
+router.use('/payments/toss', tossPayments);
 router.use('/referrals', referrals);
 router.use('/inquiries', inquiries);
 router.use('/complaints', complaints);
