@@ -5,13 +5,14 @@ import { readIdempotencyKey } from '../../lib/idempotency';
 import {
   cancelTossPayment,
   confirmTossPayment,
-  getTossClientKey,
+  getTossWidgetClientKey,
   getTossPaymentByKey,
   isTossConfigured,
   mapTossMethodToAppMethod,
   parsePaymentIdFromTossOrderId,
   tossOrderIdFromPaymentId,
   tossReceiptUrl,
+  tossWidgetKeySetupHint,
   type TossPayment,
 } from '../../lib/tosspayments';
 
@@ -50,10 +51,11 @@ function jsonPayment(
 }
 
 function tossNotConfigured(res: import('express').Response) {
+  const hint = tossWidgetKeySetupHint();
   return res.status(503).json({
     success: false,
-    error: '토스페이먼츠가 설정되지 않았습니다. (TOSS_SECRET_KEY)',
-    message: '토스페이먼츠가 설정되지 않았습니다. (TOSS_SECRET_KEY)',
+    error: hint || '토스페이먼츠가 설정되지 않았습니다. (TOSS_WIDGET_CLIENT_KEY, TOSS_WIDGET_SECRET_KEY)',
+    message: hint || '토스페이먼츠가 설정되지 않았습니다. (TOSS_WIDGET_CLIENT_KEY, TOSS_WIDGET_SECRET_KEY)',
   });
 }
 
@@ -94,13 +96,23 @@ async function applyTossPaymentDone(
  * 앱 결제위젯용 클라이언트 키 (시크릿 키는 절대 노출하지 않음)
  */
 router.get('/config', (_req, res) => {
-  if (!isTossConfigured()) return tossNotConfigured(res);
-  const clientKey = getTossClientKey();
+  if (!isTossConfigured()) {
+    const clientKey = getTossWidgetClientKey();
+    if (!clientKey) {
+      return res.status(503).json({
+        success: false,
+        error: tossWidgetKeySetupHint(),
+        message: tossWidgetKeySetupHint(),
+      });
+    }
+    return tossNotConfigured(res);
+  }
+  const clientKey = getTossWidgetClientKey();
   if (!clientKey) {
     return res.status(503).json({
       success: false,
-      error: 'TOSS_CLIENT_KEY가 설정되지 않았습니다.',
-      message: 'TOSS_CLIENT_KEY가 설정되지 않았습니다.',
+      error: tossWidgetKeySetupHint(),
+      message: tossWidgetKeySetupHint(),
     });
   }
   res.json({
@@ -146,19 +158,42 @@ router.post('/prepare', async (req, res) => {
         include: paymentInclude,
       });
       if (existing && existing.pgProvider === 'tosspayments') {
-        const orderId = tossOrderIdFromPaymentId(existing.id);
-        return res.status(200).json({
-          success: true,
-          data: {
-            paymentId: existing.id,
-            orderId,
-            amount: existing.amount,
-            orderName: buildOrderName(existing.ride?.pickup, existing.ride?.dropoff),
-            clientKey: getTossClientKey(),
-            status: existing.status,
-            idempotentReplay: true as const,
-          },
-        });
+        if (existing.status === 'completed') {
+          const orderId = tossOrderIdFromPaymentId(existing.id);
+          return res.status(200).json({
+            success: true,
+            data: {
+              paymentId: existing.id,
+              orderId,
+              amount: existing.amount,
+              orderName: buildOrderName(existing.ride?.pickup, existing.ride?.dropoff),
+              clientKey: getTossWidgetClientKey(),
+              status: existing.status,
+              idempotentReplay: true as const,
+            },
+          });
+        }
+        if (existing.status === 'pending' && existing.amount === amountNum) {
+          const orderId = tossOrderIdFromPaymentId(existing.id);
+          return res.status(200).json({
+            success: true,
+            data: {
+              paymentId: existing.id,
+              orderId,
+              amount: existing.amount,
+              orderName: buildOrderName(existing.ride?.pickup, existing.ride?.dropoff),
+              clientKey: getTossWidgetClientKey(),
+              status: existing.status,
+              idempotentReplay: true as const,
+            },
+          });
+        }
+        if (existing.status === 'failed') {
+          await prisma.payment.update({
+            where: { id: existing.id },
+            data: { idempotencyKey: null },
+          });
+        }
       }
     }
 
@@ -197,7 +232,7 @@ router.post('/prepare', async (req, res) => {
       });
 
       const orderId = tossOrderIdFromPaymentId(payment.id);
-      const clientKey = getTossClientKey();
+      const clientKey = getTossWidgetClientKey();
 
       return res.status(201).json({
         success: true,
@@ -223,7 +258,7 @@ router.post('/prepare', async (req, res) => {
               orderId: tossOrderIdFromPaymentId(existing.id),
               amount: existing.amount,
               orderName: buildOrderName(existing.ride?.pickup, existing.ride?.dropoff),
-              clientKey: getTossClientKey(),
+              clientKey: getTossWidgetClientKey(),
               idempotentReplay: true as const,
             },
           });

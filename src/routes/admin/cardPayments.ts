@@ -108,7 +108,7 @@ router.post('/cancel', async (req, res) => {
       if (!isTossConfigured()) {
         return res.status(503).json({
           success: false,
-          error: '토스페이먼츠 API가 설정되지 않았습니다. (TOSS_SECRET_KEY)',
+          error: '토스페이먼츠 API가 설정되지 않았습니다. (TOSS_WIDGET_SECRET_KEY)',
         });
       }
 
