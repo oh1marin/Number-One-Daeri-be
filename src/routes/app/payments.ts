@@ -1,9 +1,15 @@
 import { Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
-import { payWithBillingKey, isBillingKeyPayConfigured } from '../../lib/portone';
 import { randomUUID } from 'crypto';
-import { readIdempotencyKey, portoneBillingPaymentId } from '../../lib/idempotency';
+import {
+  chargeTossBillingKey,
+  isTossBillingConfigured,
+  tossBillingKeySetupHint,
+  tossCustomerKeyForUser,
+  tossReceiptUrl,
+} from '../../lib/tosspayments';
+import { readIdempotencyKey, tossBillingPaymentId } from '../../lib/idempotency';
 
 const router = Router();
 
@@ -65,7 +71,7 @@ function jsonPostPaymentRecord(
 
 /**
  * POST /payments/charge-with-card
- * 등록 카드로 결제 (빌링키 결제) — 서버에서 PortOne API로 청구
+ * 등록 카드로 결제 (토스 빌링키 자동결제)
  * Body: { rideId, amount, cardId, idempotencyKey? } · 헤더 Idempotency-Key 동일
  */
 router.post('/charge-with-card', async (req, res) => {
@@ -79,10 +85,13 @@ router.post('/charge-with-card', async (req, res) => {
     }
     const idemKey = idemResult.key;
 
-    if (!isBillingKeyPayConfigured()) {
+    if (!isTossBillingConfigured()) {
       return res.status(503).json({
         success: false,
-        error: '등록 카드 결제가 설정되지 않았습니다. (PORTONE_CHANNEL_KEY)',
+        error:
+          tossBillingKeySetupHint() ||
+          '카드 자동결제(빌링)는 아직 계약되지 않았거나 설정되지 않았습니다. 토스페이먼츠 자동결제 계약 후 이용할 수 있습니다.',
+        code: 'BILLING_NOT_CONFIGURED',
       });
     }
 
@@ -132,17 +141,36 @@ router.post('/charge-with-card', async (req, res) => {
       });
     }
 
-    const paymentId = idemKey
-      ? portoneBillingPaymentId(userId, idemKey)
-      : `charge_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    const customerKey = tossCustomerKeyForUser(userId);
+    const orderId = idemKey
+      ? tossBillingPaymentId(userId, idemKey)
+      : `BILL_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
     const orderName = `대리운전 이용료 (${ride.pickup ?? ''} → ${ride.dropoff ?? ''})`.slice(0, 100);
 
-    const result = await payWithBillingKey(paymentId, card.cardToken, amountNum, orderName);
+    const result = await chargeTossBillingKey(
+      card.cardToken,
+      {
+        customerKey,
+        amount: amountNum,
+        orderId,
+        orderName,
+        customerName: ride.user?.name ?? undefined,
+      },
+      idemKey ?? undefined
+    );
 
-    if (!result.success) {
+    if (!result.ok) {
       return res.status(400).json({
         success: false,
-        error: result.error ?? '결제에 실패했습니다.',
+        error: result.message ?? '결제에 실패했습니다.',
+      });
+    }
+
+    const toss = result.payment;
+    if (toss.status !== 'DONE') {
+      return res.status(400).json({
+        success: false,
+        error: toss.failure?.message ?? '결제에 실패했습니다.',
       });
     }
 
@@ -154,9 +182,11 @@ router.post('/charge-with-card', async (req, res) => {
           amount: amountNum,
           method: 'card',
           status: 'completed',
-          pgProvider: 'portone',
-          pgTid: result.pgTxId ?? paymentId,
+          pgProvider: 'tosspayments',
+          pgTid: toss.paymentKey,
           cardId: card.id,
+          receiptUrl: tossReceiptUrl(toss),
+          rawResponse: { toss } as Prisma.InputJsonValue,
           ...(idemKey ? { idempotencyKey: idemKey } : {}),
         },
         include: paymentChargeInclude,

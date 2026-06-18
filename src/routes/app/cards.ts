@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import { prisma } from '../../lib/prisma';
-import { refundAuthPayment, isPortOneConfigured } from '../../lib/portone';
+import {
+  deleteTossBillingKey,
+  isTossBillingConfigured,
+  tossCustomerKeyForUser,
+} from '../../lib/tosspayments';
 
 const router = Router();
 
@@ -65,7 +69,7 @@ router.get('/', async (req, res) => {
 });
 
 // DELETE /cards/:id
-// 카드 삭제 시 100원 인증 결제(transactionId) 환불 시도 → DB 삭제
+// 카드 삭제 시 토스 빌링키 삭제 시도 → DB 삭제
 router.delete('/:id', async (req, res) => {
   try {
     const userId = req.user!.id;
@@ -76,12 +80,13 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ success: false, error: '카드를 찾을 수 없습니다.' });
     }
 
-    // cardToken(transactionId)이 있으면 100원 환불 시도
-    if (card.cardToken && isPortOneConfigured()) {
-      const result = await refundAuthPayment(card.cardToken);
+    if (card.cardToken && isTossBillingConfigured()) {
+      const result = await deleteTossBillingKey(
+        card.cardToken,
+        tossCustomerKeyForUser(userId)
+      );
       if (!result.success) {
-        // 환불 실패 시에도 카드는 삭제 (이미 환불됐거나 유효기간 만료 등)
-        console.warn(`[PortOne] Card delete refund failed: ${result.error}`);
+        console.warn(`[Toss] Card delete billing key removal failed: ${result.error}`);
       }
     }
 

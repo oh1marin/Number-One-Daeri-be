@@ -72,6 +72,11 @@ export function isTossApiSecretKey(key: string): boolean {
   return k.startsWith('test_sk_') || k.startsWith('live_sk_');
 }
 
+export function isTossApiClientKey(key: string): boolean {
+  const k = key.trim();
+  return k.startsWith('test_ck_') || k.startsWith('live_ck_');
+}
+
 /** 결제위젯 클라이언트 키 (test_gck_ / live_gck_) */
 export function getTossWidgetClientKey(): string | null {
   const widget = cleanEnv(process.env.TOSS_WIDGET_CLIENT_KEY);
@@ -90,6 +95,17 @@ export function getTossWidgetSecretKey(): string | null {
 
   const legacy = cleanEnv(process.env.TOSS_SECRET_KEY);
   if (legacy && isTossWidgetSecretKey(legacy)) return legacy;
+
+  return null;
+}
+
+/** API 결제창/빌링 클라이언트 키 (test_ck_ / live_ck_) */
+export function getTossApiClientKey(): string | null {
+  const api = cleanEnv(process.env.TOSS_API_CLIENT_KEY);
+  if (api && isTossApiClientKey(api)) return api;
+
+  const legacy = cleanEnv(process.env.TOSS_CLIENT_KEY);
+  if (legacy && isTossApiClientKey(legacy)) return legacy;
 
   return null;
 }
@@ -142,6 +158,41 @@ export function tossWidgetKeySetupHint(): string {
 export function isTossConfigured(): boolean {
   return Boolean(getTossWidgetClientKey() && getTossWidgetSecretKey());
 }
+
+/** 자동결제(빌링) — test_sk_ API 시크릿 */
+export function isTossBillingConfigured(): boolean {
+  return Boolean(getTossApiSecretKey());
+}
+
+export function tossBillingKeySetupHint(): string {
+  if (!getTossApiSecretKey()) {
+    return 'TOSS_API_SECRET_KEY=test_sk_... (빌링/자동결제용)를 설정해 주세요.';
+  }
+  if (!getTossApiClientKey()) {
+    return 'TOSS_API_CLIENT_KEY=test_ck_... (카드 등록창용)를 설정해 주세요.';
+  }
+  return '';
+}
+
+/** 빌링 customerKey — userId 기반 (토스 규격 문자만) */
+export function tossCustomerKeyForUser(userId: string): string {
+  const sanitized = userId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const key = `u_${sanitized}`;
+  return key.length >= 2 ? key.slice(0, 300) : `u_${sanitized}x`.slice(0, 300);
+}
+
+export type TossBilling = {
+  billingKey: string;
+  customerKey: string;
+  method?: string;
+  card?: { number?: string; cardType?: string; ownerType?: string };
+  cardNumber?: string;
+  cardCompany?: string;
+};
+
+export type TossBillingResult =
+  | { ok: true; billing: TossBilling }
+  | { ok: false; status: number; code?: string; message: string };
 
 function basicAuth(secretKey: string): string {
   return `Basic ${Buffer.from(`${secretKey}:`, 'utf8').toString('base64')}`;
@@ -307,6 +358,78 @@ export async function cancelTossPayment(
       { headers: buildWidgetHeaders(idempotencyKey), timeout: 30000 }
     );
     return { success: true, payment: res.data };
+  } catch (err) {
+    const parsed = parseAxiosError(err);
+    return { success: false, error: parsed.message };
+  }
+}
+
+/**
+ * POST /v1/billing/authorizations/issue — authKey로 빌링키 발급
+ */
+export async function issueTossBillingKey(
+  authKey: string,
+  customerKey: string,
+  idempotencyKey?: string
+): Promise<TossBillingResult> {
+  try {
+    const res = await axios.post<TossBilling>(
+      `${getBaseUrl()}/billing/authorizations/issue`,
+      { authKey, customerKey },
+      { headers: buildApiHeaders(idempotencyKey), timeout: 30000 }
+    );
+    return { ok: true, billing: res.data };
+  } catch (err) {
+    const parsed = parseAxiosError(err);
+    return { ok: false, status: parsed.status, code: parsed.code, message: parsed.message };
+  }
+}
+
+/**
+ * POST /v1/billing/{billingKey} — 등록 카드 자동결제 승인
+ */
+export async function chargeTossBillingKey(
+  billingKey: string,
+  params: {
+    customerKey: string;
+    amount: number;
+    orderId: string;
+    orderName: string;
+    customerName?: string;
+  },
+  idempotencyKey?: string
+): Promise<TossConfirmResult> {
+  try {
+    const res = await axios.post<TossPayment>(
+      `${getBaseUrl()}/billing/${encodeURIComponent(billingKey)}`,
+      {
+        customerKey: params.customerKey,
+        amount: params.amount,
+        orderId: params.orderId,
+        orderName: params.orderName.slice(0, 100),
+        ...(params.customerName ? { customerName: params.customerName.slice(0, 100) } : {}),
+      },
+      { headers: buildApiHeaders(idempotencyKey), timeout: 65000 }
+    );
+    return { ok: true, payment: res.data };
+  } catch (err) {
+    const parsed = parseAxiosError(err);
+    return { ok: false, status: parsed.status, code: parsed.code, message: parsed.message };
+  }
+}
+
+/** DELETE /v1/billing/{billingKey} */
+export async function deleteTossBillingKey(
+  billingKey: string,
+  customerKey: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    await axios.delete(`${getBaseUrl()}/billing/${encodeURIComponent(billingKey)}`, {
+      headers: buildApiHeaders(),
+      data: { customerKey },
+      timeout: 30000,
+    });
+    return { success: true };
   } catch (err) {
     const parsed = parseAxiosError(err);
     return { success: false, error: parsed.message };

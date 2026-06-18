@@ -38,6 +38,15 @@ export function portoneBillingPaymentId(userId: string, idempotencyKey: string):
   return `chg_${h}`;
 }
 
+/** 토스 빌링 자동결제 orderId — 6~64자, 영문·숫자·_- */
+export function tossBillingPaymentId(userId: string, idempotencyKey: string): string {
+  const h = createHash('sha256')
+    .update(`toss:billing:${userId}:${idempotencyKey}`, 'utf8')
+    .digest('hex')
+    .slice(0, 24);
+  return `BILL_${h}`;
+}
+
 export const CLIENT_CALL_ID_MAX_LEN = 128;
 
 export type ClientCallIdResult =

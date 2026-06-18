@@ -5,14 +5,20 @@ import { readIdempotencyKey } from '../../lib/idempotency';
 import {
   cancelTossPayment,
   confirmTossPayment,
+  getTossApiClientKey,
   getTossWidgetClientKey,
   getTossPaymentByKey,
+  isTossBillingConfigured,
   isTossConfigured,
+  issueTossBillingKey,
   mapTossMethodToAppMethod,
   parsePaymentIdFromTossOrderId,
+  tossBillingKeySetupHint,
+  tossCustomerKeyForUser,
   tossOrderIdFromPaymentId,
   tossReceiptUrl,
   tossWidgetKeySetupHint,
+  type TossBilling,
   type TossPayment,
 } from '../../lib/tosspayments';
 
@@ -57,6 +63,29 @@ function tossNotConfigured(res: import('express').Response) {
     error: hint || '토스페이먼츠가 설정되지 않았습니다. (TOSS_WIDGET_CLIENT_KEY, TOSS_WIDGET_SECRET_KEY)',
     message: hint || '토스페이먼츠가 설정되지 않았습니다. (TOSS_WIDGET_CLIENT_KEY, TOSS_WIDGET_SECRET_KEY)',
   });
+}
+
+function tossBillingNotConfigured(res: import('express').Response) {
+  const hint = tossBillingKeySetupHint();
+  const msg =
+    hint ||
+    '카드 자동결제(빌링)는 아직 계약되지 않았거나 설정되지 않았습니다. 토스페이먼츠 자동결제 계약 후 TOSS_API_CLIENT_KEY/SECRET_KEY를 설정해 주세요.';
+  return res.status(503).json({
+    success: false,
+    error: msg,
+    message: msg,
+    code: 'BILLING_NOT_CONFIGURED',
+  });
+}
+
+function billingCardLabel(billing: TossBilling): string {
+  const num = billing.card?.number ?? billing.cardNumber ?? '';
+  const digits = num.replace(/\D/g, '');
+  const last4 = digits.length >= 4 ? digits.slice(-4) : '';
+  const company = billing.cardCompany?.trim();
+  if (company && last4) return `${company} *${last4}`;
+  if (last4) return `카드 *${last4}`;
+  return '등록카드';
 }
 
 function buildOrderName(pickup?: string | null, dropoff?: string | null): string {
@@ -497,6 +526,90 @@ router.post('/cancel', async (req, res) => {
     res.json({
       success: true,
       data: { message: '결제가 취소되었습니다.', status: toss?.status },
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: String(e), message: String(e) });
+  }
+});
+
+/**
+ * GET /payments/toss/billing/config
+ * 카드 등록(빌링 인증)용 API 클라이언트 키 + customerKey
+ */
+router.get('/billing/config', (req, res) => {
+  if (!isTossBillingConfigured()) return tossBillingNotConfigured(res);
+
+  const clientKey = getTossApiClientKey();
+  if (!clientKey) {
+    const hint = tossBillingKeySetupHint();
+    return res.status(503).json({
+      success: false,
+      error: hint,
+      message: hint,
+    });
+  }
+
+  const userId = req.user!.id;
+  res.json({
+    success: true,
+    data: {
+      clientKey,
+      customerKey: tossCustomerKeyForUser(userId),
+      provider: 'tosspayments',
+    },
+  });
+});
+
+/**
+ * POST /payments/toss/billing/issue
+ * 빌링 인증 후 authKey로 빌링키 발급
+ * Body: { authKey, idempotencyKey? }
+ */
+router.post('/billing/issue', async (req, res) => {
+  try {
+    if (!isTossBillingConfigured()) return tossBillingNotConfigured(res);
+
+    const userId = req.user!.id;
+    const { authKey, idempotencyKey: bodyIdem } = req.body;
+
+    const idemResult = readIdempotencyKey(req, bodyIdem);
+    if (!idemResult.ok) {
+      return res.status(400).json({ success: false, error: idemResult.error, message: idemResult.error });
+    }
+
+    const authKeyStr = authKey != null ? String(authKey).trim() : '';
+    if (!authKeyStr) {
+      const msg = 'authKey 필수';
+      return res.status(400).json({ success: false, error: msg, message: msg });
+    }
+
+    const customerKey = tossCustomerKeyForUser(userId);
+    const result = await issueTossBillingKey(
+      authKeyStr,
+      customerKey,
+      idemResult.key ?? undefined
+    );
+
+    if (!result.ok) {
+      const httpStatus = result.status >= 400 && result.status < 600 ? result.status : 400;
+      return res.status(httpStatus).json({
+        success: false,
+        error: result.message,
+        message: result.message,
+        code: result.code,
+      });
+    }
+
+    const billing = result.billing;
+    res.status(200).json({
+      success: true,
+      data: {
+        billingKey: billing.billingKey,
+        customerKey: billing.customerKey,
+        cardName: billingCardLabel(billing),
+        cardNumber: billing.card?.number ?? billing.cardNumber ?? null,
+        provider: 'tosspayments',
+      },
     });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e), message: String(e) });
