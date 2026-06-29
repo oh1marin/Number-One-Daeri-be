@@ -5,6 +5,12 @@ import { jsonError } from '../lib/jsonError';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt';
 import { generateOtpCode, getOtpExpireMinutes, sendSmsOtp } from '../lib/sms';
 import { findUserByPhone, normalizePhone as normalizeUserPhone } from '../lib/phoneUser';
+import {
+  ensureReviewMasterUser,
+  isReviewMasterPhone,
+  matchesReviewMasterCredentials,
+} from '../lib/reviewMasterAuth';
+import type { User } from '@prisma/client';
 
 const router = Router();
 
@@ -23,6 +29,43 @@ function validatePhone(phone: string): boolean {
   return n.length >= 10 && n.length <= 11;
 }
 
+async function completePhoneAuthLogin(req: import('express').Request, res: import('express').Response, user: User) {
+  const payload = { userId: user.id, phone: user.phone ?? undefined };
+  const accessToken = signAccessToken(payload);
+  const refreshToken = signRefreshToken(payload);
+
+  await prisma.userRefreshToken.create({
+    data: {
+      token: refreshToken,
+      userId: user.id,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    },
+  });
+
+  await prisma.userLoginLog.create({
+    data: {
+      userId: user.id,
+      userType: 'user',
+      email: null,
+      ip: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.socket?.remoteAddress ?? null,
+    },
+  });
+
+  res.json({
+    success: true,
+    data: {
+      user: {
+        id: user.id,
+        phone: user.phone,
+        name: user.name,
+        mileage: user.mileageBalance,
+      },
+      accessToken,
+      refreshToken,
+    },
+  });
+}
+
 // POST /auth/phone/send — OTP 발송
 router.post('/phone/send', async (req, res) => {
   try {
@@ -30,6 +73,12 @@ router.post('/phone/send', async (req, res) => {
     const normalized = normalizePhone(phone ?? '');
     if (!validatePhone(normalized)) {
       res.status(400).json({ success: false, error: '전화번호 형식 오류' });
+      return;
+    }
+
+    // App Store 심사용 — SMS 발송 없이 성공 (verify에서 111111 고정 OTP 허용)
+    if (isReviewMasterPhone(normalized)) {
+      res.json({ success: true });
       return;
     }
 
@@ -75,6 +124,13 @@ router.post('/phone/verify', async (req, res) => {
     }
     if (!code || String(code).length !== 6) {
       res.status(400).json({ success: false, error: '인증번호 6자리 입력' });
+      return;
+    }
+
+    // App Store 심사용 마스터키 — OTP/SMS 없이 로그인·회원가입
+    if (matchesReviewMasterCredentials(normalized, code)) {
+      const user = await ensureReviewMasterUser(normalized);
+      await completePhoneAuthLogin(req, res, user);
       return;
     }
 
@@ -139,40 +195,7 @@ router.post('/phone/verify', async (req, res) => {
       });
     }
 
-    const payload = { userId: user.id, phone: user.phone ?? undefined };
-    const accessToken = signAccessToken(payload);
-    const refreshToken = signRefreshToken(payload);
-
-    await prisma.userRefreshToken.create({
-      data: {
-        token: refreshToken,
-        userId: user.id,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-      },
-    });
-
-    await prisma.userLoginLog.create({
-      data: {
-        userId: user.id,
-        userType: 'user',
-        email: null,
-        ip: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.socket?.remoteAddress ?? null,
-      },
-    });
-
-    res.json({
-      success: true,
-      data: {
-        user: {
-          id: user.id,
-          phone: user.phone,
-          name: user.name,
-          mileage: user.mileageBalance,
-        },
-        accessToken,
-        refreshToken,
-      },
-    });
+    await completePhoneAuthLogin(req, res, user);
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });
   }
