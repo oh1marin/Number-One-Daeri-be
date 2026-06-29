@@ -1,6 +1,11 @@
 import { Router } from 'express';
 import { prisma } from '../../lib/prisma';
 import { sendMileageAdjustNotification } from '../../lib/fcm';
+import {
+  findRideMileageRefund,
+  findRideMileageUse,
+  refundMileageForRide,
+} from '../../services/rideMileagePayment';
 
 const router = Router();
 
@@ -194,6 +199,153 @@ router.get('/errors', async (_req, res) => {
     res.json({ success: true, data: { items: [], total: 0 } });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });
+  }
+});
+
+// GET /admin/mileage/ride-payments — 마일리지 결제 콜 내역 (차감/환불 상태)
+router.get('/ride-payments', async (req, res) => {
+  try {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
+    const skip = (page - 1) * limit;
+    const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
+    const phone = typeof req.query.phone === 'string' ? req.query.phone.trim() : '';
+
+    const where: Record<string, unknown> = {
+      paymentMethod: 'mileage',
+      userId: { not: null },
+    };
+    if (status) where.status = status;
+    if (phone.length >= 4) {
+      const digits = phone.replace(/\D/g, '');
+      where.OR = [{ phone: { contains: digits } }, { user: { phone: { contains: digits } } }];
+    }
+
+    const [rides, total] = await Promise.all([
+      prisma.ride.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          user: { select: { id: true, name: true, phone: true, mileageBalance: true } },
+        },
+      }),
+      prisma.ride.count({ where }),
+    ]);
+
+    const items = await Promise.all(
+      rides.map(async (r) => {
+        const userId = r.userId!;
+        const [useRow, refundRow] = await Promise.all([
+          findRideMileageUse(prisma, userId, r.id),
+          findRideMileageRefund(prisma, userId, r.id),
+        ]);
+        const amount =
+          r.total > 0 ? r.total : r.estimatedFare ?? (useRow ? Math.abs(useRow.amount) : 0);
+
+        return {
+          rideId: r.id,
+          status: r.status,
+          pickup: r.pickup,
+          dropoff: r.dropoff,
+          amount,
+          createdAt: r.createdAt,
+          user: r.user,
+          mileage: {
+            deducted: Boolean(useRow),
+            deductedAmount: useRow ? Math.abs(useRow.amount) : 0,
+            deductedAt: useRow?.createdAt ?? null,
+            balanceAfterDeduct: useRow?.balance ?? null,
+            refunded: Boolean(refundRow),
+            refundedAmount: refundRow?.amount ?? 0,
+            refundedAt: refundRow?.createdAt ?? null,
+            canRefund: Boolean(useRow) && !refundRow,
+          },
+        };
+      })
+    );
+
+    res.json({ success: true, data: { items, total, page, limit } });
+  } catch (e) {
+    res.status(500).json({ success: false, error: String(e) });
+  }
+});
+
+// POST /admin/mileage/ride-payments/:rideId/refund — 마일리지 결제 환불
+router.post('/ride-payments/:rideId/refund', async (req, res) => {
+  try {
+    const rideId = req.params.rideId;
+    const reason =
+      req.body?.reason != null ? String(req.body.reason).trim() : '관리자 환불';
+
+    const ride = await prisma.ride.findUnique({ where: { id: rideId } });
+    if (!ride) {
+      return res.status(404).json({ success: false, error: '콜을 찾을 수 없습니다.' });
+    }
+    if (ride.paymentMethod !== 'mileage' || !ride.userId) {
+      return res.status(400).json({
+        success: false,
+        error: '마일리지 결제 앱 콜만 환불할 수 있습니다.',
+      });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const refund = await refundMileageForRide(tx, {
+        userId: ride.userId!,
+        rideId,
+        reason,
+      });
+
+      const cancelRide = req.body?.cancelRide === true && ride.status !== 'completed';
+      if (cancelRide) {
+        await tx.ride.update({
+          where: { id: rideId },
+          data: { status: 'cancelled' },
+        });
+      }
+
+      const user = await tx.user.findUnique({
+        where: { id: ride.userId! },
+        select: { id: true, name: true, phone: true, mileageBalance: true },
+      });
+
+      return { refund, user, cancelled: cancelRide };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        rideId,
+        refunded: result.refund.refunded,
+        alreadyRefunded: result.refund.alreadyRefunded,
+        amount: result.refund.amount,
+        user: result.user,
+        rideCancelled: result.cancelled,
+      },
+      message: result.refund.alreadyRefunded
+        ? '이미 환불된 콜입니다.'
+        : `${result.refund.amount.toLocaleString()}원 마일리지를 환불했습니다.`,
+    });
+
+    if (result.refund.refunded && result.user) {
+      void sendMileageAdjustNotification(
+        ride.userId!,
+        result.refund.amount,
+        result.user.mileageBalance,
+        reason
+      ).catch((err) => console.warn('[FCM] mileage refund 알림 실패:', err));
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg === 'NO_MILEAGE_DEDUCTION') {
+      return res.status(400).json({
+        success: false,
+        error: '차감 내역이 없어 환불할 수 없습니다.',
+        code: 'NO_DEDUCTION',
+      });
+    }
+    res.status(500).json({ success: false, error: msg });
   }
 });
 

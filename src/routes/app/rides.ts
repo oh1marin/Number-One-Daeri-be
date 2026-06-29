@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { readClientCallId } from '../../lib/idempotency';
-import { findNearbyDrivers } from '../../services/matchingService';
+import { deductMileageForRideCall } from '../../services/rideMileagePayment';
 
 const router = Router();
 
@@ -165,10 +165,19 @@ router.post('/call', async (req, res) => {
       return;
     }
 
-    // 마일리지 결제: 잔액 검증
+    // 마일리지 결제: 예정요금 필수 + 잔액 검증 (실제 차감은 콜 생성 트랜잭션에서)
+    let mileageFare = 0;
     if (paymentMethod === 'mileage') {
-      const need = Math.max(0, Number(estimatedFare) || 0);
-      if (user.mileageBalance < need) {
+      mileageFare = Math.max(0, Math.round(Number(estimatedFare) || 0));
+      if (mileageFare <= 0) {
+        res.status(400).json({
+          success: false,
+          error: 'MILEAGE_FARE_REQUIRED',
+          message: '마일리지 결제는 estimatedFare(예정요금)가 필요합니다.',
+        });
+        return;
+      }
+      if (user.mileageBalance < mileageFare) {
         res.status(400).json({
           success: false,
           error: 'INSUFFICIENT_MILEAGE',
@@ -239,38 +248,91 @@ router.post('/call', async (req, res) => {
 
     let ride;
     try {
-      ride = await prisma.ride.create({
-        data: {
-          date: today,
-          time,
-          customerName: user.name ?? '앱 사용자',
-          phone: phone ?? user.phone ?? '16680001',
-          userId,
-          pickup: address,
-          dropoff: dropoffText,
-          latitude: lat,
-          longitude: lng,
-          // 앱이 보내는 도착 설명 문자열(없으면 null)
-          addressDetail: rideAddressDetail,
-          destinationLatitude: destLat,
-          destinationLongitude: destLng,
-          destinationAddress: destinationAddrText,
+      if (paymentMethod === 'mileage') {
+        ride = await prisma.$transaction(async (tx) => {
+          const freshUser = await tx.user.findUnique({ where: { id: userId } });
+          if (!freshUser || freshUser.mileageBalance < mileageFare) {
+            throw new Error('INSUFFICIENT_MILEAGE');
+          }
 
-          // 대리호출 옵션(선택)
-          transmission: transmission ?? null,
-          serviceType: serviceType ?? null,
-          quickBoard: quickBoard ?? null,
-          vehicleType: vehicleType ?? null,
+          const created = await tx.ride.create({
+            data: {
+              date: today,
+              time,
+              customerName: user.name ?? '앱 사용자',
+              phone: phone ?? user.phone ?? '16680001',
+              userId,
+              pickup: address,
+              dropoff: dropoffText,
+              latitude: lat,
+              longitude: lng,
+              addressDetail: rideAddressDetail,
+              destinationLatitude: destLat,
+              destinationLongitude: destLng,
+              destinationAddress: destinationAddrText,
+              transmission: transmission ?? null,
+              serviceType: serviceType ?? null,
+              quickBoard: quickBoard ?? null,
+              vehicleType: vehicleType ?? null,
+              fareType,
+              paymentMethod,
+              estimatedDistanceKm:
+                estimatedDistanceKm != null ? Number(estimatedDistanceKm) : null,
+              estimatedFare: mileageFare,
+              fare: mileageFare,
+              total: mileageFare,
+              status: 'pending',
+              ...(clientCallId ? { clientCallId } : {}),
+            },
+          });
 
-          fareType,
-          paymentMethod,
-          estimatedDistanceKm: estimatedDistanceKm != null ? Number(estimatedDistanceKm) : null,
-          estimatedFare: estimatedFare != null ? Math.round(Number(estimatedFare)) : null,
-          status: 'pending',
-          ...(clientCallId ? { clientCallId } : {}),
-        },
-      });
+          await deductMileageForRideCall(tx, {
+            userId,
+            rideId: created.id,
+            amount: mileageFare,
+          });
+
+          return created;
+        });
+      } else {
+        ride = await prisma.ride.create({
+          data: {
+            date: today,
+            time,
+            customerName: user.name ?? '앱 사용자',
+            phone: phone ?? user.phone ?? '16680001',
+            userId,
+            pickup: address,
+            dropoff: dropoffText,
+            latitude: lat,
+            longitude: lng,
+            addressDetail: rideAddressDetail,
+            destinationLatitude: destLat,
+            destinationLongitude: destLng,
+            destinationAddress: destinationAddrText,
+            transmission: transmission ?? null,
+            serviceType: serviceType ?? null,
+            quickBoard: quickBoard ?? null,
+            vehicleType: vehicleType ?? null,
+            fareType,
+            paymentMethod,
+            estimatedDistanceKm:
+              estimatedDistanceKm != null ? Number(estimatedDistanceKm) : null,
+            estimatedFare: estimatedFare != null ? Math.round(Number(estimatedFare)) : null,
+            status: 'pending',
+            ...(clientCallId ? { clientCallId } : {}),
+          },
+        });
+      }
     } catch (e) {
+      if (e instanceof Error && e.message === 'INSUFFICIENT_MILEAGE') {
+        res.status(400).json({
+          success: false,
+          error: 'INSUFFICIENT_MILEAGE',
+          message: '마일리지 잔액이 부족합니다.',
+        });
+        return;
+      }
       if (
         e instanceof Prisma.PrismaClientKnownRequestError &&
         e.code === 'P2002' &&
@@ -295,35 +357,23 @@ router.post('/call', async (req, res) => {
       throw e;
     }
 
-    // 마일리지 결제: 잔액만 검증. 실제 차감은 운행 완료 시(complete) 처리
-
-    // 배차: 가까운 기사에게 콜 알림 (Socket)
-    const io = (global as { io?: { to: (r: string) => { emit: (e: string, d: object) => void } } }).io;
-    if (io && lat != null && lng != null) {
-      const drivers = await findNearbyDrivers(lat, lng, 5);
-      for (const d of drivers) {
-        io.to(`driver:${d.id}`).emit('ride:new', {
-          rideId: ride.id,
-          pickup: address,
-          pickupLat: lat,
-          pickupLng: lng,
-          // 드라이버 앱/배차 로직에서 활용 가능하도록 함께 전달(선택)
-          transmission: ride.transmission,
-          serviceType: ride.serviceType,
-          quickBoard: ride.quickBoard,
-          vehicleType: ride.vehicleType,
-        });
-      }
+    // 마일리지 결제: 호출 시 즉시 차감 완료
+    const responseData: Record<string, unknown> = {
+      rideId: ride.id,
+      status: ride.status,
+      estimatedTime: null,
+    };
+    if (paymentMethod === 'mileage') {
+      const after = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { mileageBalance: true },
+      });
+      responseData.mileageDeducted = true;
+      responseData.total = ride.total;
+      responseData.mileageBalanceAfter = after?.mileageBalance ?? null;
     }
 
-    res.status(201).json({
-      success: true,
-      data: {
-        rideId: ride.id,
-        status: ride.status,
-        estimatedTime: null,
-      },
-    });
+    res.status(201).json({ success: true, data: responseData });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });
   }

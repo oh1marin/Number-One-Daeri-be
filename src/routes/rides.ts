@@ -1,5 +1,10 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
+import {
+  applyRideCompletionMileage,
+  resolveCompletionFareAmount,
+} from '../services/rideMileageOnComplete';
+import { findRideMileageUse } from '../services/rideMileagePayment';
 
 const router = Router();
 
@@ -62,15 +67,30 @@ async function buildPhoneToUserIdMap(): Promise<Map<string, string>> {
 }
 
 // GET /rides — 목록 (관리자 콜 리스트: No, 접수번호, 전화번호, 접수시간, 경과(초), 상태, 출발지, 도착지, 요금, 현금/카드/마일, 결제방법, 접수구분)
-// 쿼리: ?date=, ?driverName=, ?field=phone&q=, ?page=1&limit=50
+// 쿼리: ?date=, ?driverName=, ?status=, ?paymentMethod=, ?phone=, ?field=phone&q=, ?page=1&limit=50
 router.get('/', async (req, res) => {
   try {
-    const { date, driverName, field, q, page, limit } = req.query;
+    const { date, driverName, field, q, page, limit, status, paymentMethod, phone } = req.query;
     const where: Record<string, unknown> = {};
 
     if (typeof date === 'string' && date) where.date = date;
     if (typeof driverName === 'string' && driverName) {
       where.driverName = { contains: driverName, mode: 'insensitive' };
+    }
+    if (typeof status === 'string' && status && RIDE_STATUSES.has(status)) {
+      where.status = status;
+    }
+    if (typeof paymentMethod === 'string' && paymentMethod && PAYMENT_METHODS.has(paymentMethod)) {
+      where.paymentMethod = paymentMethod;
+    }
+    if (typeof phone === 'string' && phone.trim()) {
+      const digits = digitsOnly(phone.trim());
+      if (digits.length >= 4) {
+        where.OR = [
+          { phone: { contains: digits } },
+          { user: { phone: { contains: digits } } },
+        ];
+      }
     }
     if (field && typeof q === 'string' && q) {
       const fieldStr = String(field);
@@ -95,7 +115,7 @@ router.get('/', async (req, res) => {
         include: {
           customer: { select: { id: true, name: true, no: true } },
           driver: { select: { id: true, name: true, no: true } },
-          user: { select: { id: true, name: true, phone: true } },
+          user: { select: { id: true, name: true, phone: true, mileageBalance: true } },
         },
       }),
       prisma.ride.count({ where }),
@@ -120,7 +140,7 @@ router.get('/', async (req, res) => {
         receiptNo: r.id,
         receipt_no: r.id,
         phone: displayPhone,
-        user: r.user ? { id: r.user.id, name: r.user.name, phone: r.user.phone } : null,
+        user: r.user ? { id: r.user.id, name: r.user.name, phone: r.user.phone, mileageBalance: r.user.mileageBalance } : null,
         receivedAt: r.createdAt,
         date: r.date,
         time: r.time,
@@ -366,6 +386,123 @@ router.get('/:id', async (req, res) => {
     });
     if (!ride) return res.status(404).json({ success: false, error: 'Ride not found' });
     res.json({ success: true, data: ride });
+  } catch (e) {
+    res.status(500).json({ success: false, error: String(e) });
+  }
+});
+
+// POST /rides/:id/complete — 관리자: 운행 완료 (적립·추천인). 마일리지 차감은 호출 시 이미 처리됨
+router.post('/:id/complete', async (req, res) => {
+  try {
+    const rideId = req.params.id;
+    const ride = await prisma.ride.findUnique({ where: { id: rideId } });
+    if (!ride) {
+      return res.status(404).json({ success: false, error: '콜을 찾을 수 없습니다.' });
+    }
+
+    if (ride.paymentMethod !== 'mileage') {
+      return res.status(400).json({
+        success: false,
+        error: '마일리지 결제 콜만 이 API로 완료할 수 있습니다.',
+        code: 'NOT_MILEAGE_PAYMENT',
+      });
+    }
+
+    if (!ride.userId) {
+      return res.status(400).json({
+        success: false,
+        error: '앱 회원(userId)이 연결된 콜만 완료할 수 있습니다.',
+        code: 'NO_APP_USER',
+      });
+    }
+
+    if (ride.status === 'completed') {
+      return res.json({
+        success: true,
+        data: {
+          id: ride.id,
+          status: ride.status,
+          total: ride.total,
+          idempotentReplay: true,
+        },
+        message: '이미 완료된 콜입니다.',
+      });
+    }
+
+    if (ride.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        error: '취소된 콜은 완료할 수 없습니다.',
+        code: 'RIDE_CANCELLED',
+      });
+    }
+
+    const fareNum = resolveCompletionFareAmount(ride, req.body);
+    if (fareNum <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: '완료 요금(total 또는 estimatedFare)을 확인해 주세요.',
+        code: 'INVALID_FARE',
+      });
+    }
+
+    const user = await prisma.user.findFirst({
+      where: { id: ride.userId, deletedAt: null },
+    });
+    if (!user) {
+      return res.status(400).json({ success: false, error: '회원을 찾을 수 없습니다.' });
+    }
+
+    const alreadyUsed = await findRideMileageUse(prisma, ride.userId, ride.id);
+    if (!alreadyUsed && user.mileageBalance < fareNum) {
+      return res.status(400).json({
+        success: false,
+        error: `마일리지 잔액이 부족합니다. (잔액 ${user.mileageBalance.toLocaleString()}원, 필요 ${fareNum.toLocaleString()}원)`,
+        code: 'INSUFFICIENT_MILEAGE',
+      });
+    }
+
+    const driverName =
+      req.body?.driverName != null && String(req.body.driverName).trim() !== ''
+        ? String(req.body.driverName).trim()
+        : undefined;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.ride.update({
+        where: { id: rideId },
+        data: {
+          status: 'completed',
+          fare: fareNum,
+          total: fareNum,
+          ...(driverName ? { driverName } : {}),
+        },
+      });
+
+      await applyRideCompletionMileage(
+        tx,
+        { id: ride.id, userId: ride.userId, paymentMethod: ride.paymentMethod },
+        fareNum
+      );
+
+      return tx.ride.findUnique({
+        where: { id: rideId },
+        include: {
+          user: { select: { id: true, name: true, phone: true, mileageBalance: true } },
+        },
+      });
+    });
+
+    res.json({
+      success: true,
+      data: {
+        id: updated?.id,
+        status: updated?.status,
+        total: updated?.total,
+        fare: updated?.fare,
+        user: updated?.user,
+      },
+      message: '운행 완료 처리되었습니다.',
+    });
   } catch (e) {
     res.status(500).json({ success: false, error: String(e) });
   }

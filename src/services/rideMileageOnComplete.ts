@@ -1,5 +1,8 @@
 import type { Prisma } from '@prisma/client';
-import { nextSignupBonusAfterRideSpend } from '../lib/mileageBuckets';
+import {
+  deductMileageForRideCall,
+  findRideMileageUse,
+} from './rideMileagePayment';
 
 async function getAccumulationSettings(tx: Prisma.TransactionClient) {
   let s = await tx.accumulationSettings.findFirst();
@@ -16,8 +19,7 @@ async function getAccumulationSettings(tx: Prisma.TransactionClient) {
 }
 
 /**
- * 운행 완료 시: (1) 마일리지 결제면 요금 차감 (2) 이용금액의 rideEarnRate% 유저 적립 (3) 추천인 보상
- * 동일 ride.id에 대한 유저 적립/추천인 적립은 description으로 idempotent 처리.
+ * 운행 완료 시: (1) 마일리지 결제 차감 — 호출 시 이미 차감됐으면 스킵 (2) 이용 적립 (3) 추천인 보상
  */
 export async function applyRideCompletionMileage(
   tx: Prisma.TransactionClient,
@@ -32,36 +34,14 @@ export async function applyRideCompletionMileage(
   const paymentMethod = ride.paymentMethod ?? 'cash';
   const acc = await getAccumulationSettings(tx);
 
-  // 마일리지 결제: 요금 차감 (1회성 — 기존 description 패턴 유지)
+  // 마일리지 결제: 호출 시 차감 안 된 레거시 콜만 여기서 차감
   if (paymentMethod === 'mileage') {
-    const dupUse = await tx.mileageHistory.findFirst({
-      where: {
-        userId: ride.userId,
-        type: 'use',
-        description: { contains: `콜 ${ride.id}` },
-      },
-    });
+    const dupUse = await findRideMileageUse(tx, ride.userId, ride.id);
     if (!dupUse) {
-      const newBalance = user.mileageBalance - fareNum;
-      const newSignupRemaining = nextSignupBonusAfterRideSpend(
-        user.signupBonusRemaining ?? 0,
-        fareNum,
-      );
-      await tx.user.update({
-        where: { id: ride.userId },
-        data: {
-          mileageBalance: newBalance,
-          signupBonusRemaining: newSignupRemaining,
-        },
-      });
-      await tx.mileageHistory.create({
-        data: {
-          userId: ride.userId,
-          type: 'use',
-          amount: -fareNum,
-          balance: newBalance,
-          description: `대리운전 결제 (콜 ${ride.id})`,
-        },
+      await deductMileageForRideCall(tx, {
+        userId: ride.userId,
+        rideId: ride.id,
+        amount: fareNum,
       });
     }
   }
